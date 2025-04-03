@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { LayoutGrid as AzureIcon } from "lucide-react"; // Using lucide-react; adjust if you have a custom icon
+import { LayoutGrid as AzureIcon } from "lucide-react";
 
 export default function SignInPage() {
   const { data: session, status } = useSession();
@@ -26,13 +26,15 @@ export default function SignInPage() {
         <p className="mb-6 text-center text-gray-600">
           Sign in with your Azure account to access the application.
         </p>
-        <Button
-          onClick={() => signIn("azure-ad", { callbackUrl: "/" })}
-          className="flex items-center space-x-2"
-        >
-          <AzureIcon className="h-5 w-5" />
-          <span>Sign in with Azure AD</span>
-        </Button>
+        <div className="flex justify-center">
+          <Button
+            onClick={() => signIn("azure-ad", { callbackUrl: "/" })}
+            className="flex items-center space-x-2"
+          >
+            <AzureIcon className="h-5 w-5" />
+            <span>Sign in with Azure AD</span>
+          </Button>
+        </div>
       </div>
     </div>
   );
