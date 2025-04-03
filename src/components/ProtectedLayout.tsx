@@ -16,7 +16,7 @@ export function ProtectedLayout({ children }: { children: React.ReactNode }) {
   }, [session, status, router]);
 
   if (status === "loading" || !session) {
-    return <p className="p-4">Loading...</p>;
+    return <div className="p-4">Loading...</div>;
   }
 
   return <>{children}</>;
