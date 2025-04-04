@@ -1,0 +1,138 @@
+trigger:
+  branches:
+    include:
+      - main
+
+variables:
+  # Name of the Docker registry service connection defined in Azure DevOps
+  dockerRegistryServiceConnection: 'YourDockerRegistryServiceConnection'
+  dockerRegistry: 'yourregistry.azurecr.io'
+  imageRepository: 'next-auth-azure-app'
+  containerPort: '3000'
+  buildId: $(Build.BuildId)
+
+stages:
+  - stage: Build
+    displayName: Build Stage
+    jobs:
+      - job: Build
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '18.x'
+            displayName: 'Install Node.js'
+          - script: |
+              npm install
+              npm run build
+            displayName: 'Install dependencies and build'
+          - task: Docker@2
+            displayName: 'Build Docker Image'
+            inputs:
+              containerRegistry: $(dockerRegistryServiceConnection)
+              repository: $(dockerRegistry)/$(imageRepository)
+              command: 'buildAndPush'
+              Dockerfile: 'Dockerfile'
+              tags: |
+                $(buildId)
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)'
+              artifact: 'drop'
+
+  - stage: Deploy_Dev
+    displayName: Deploy to Dev
+    dependsOn: Build
+    jobs:
+      - deployment: DeployDev
+        pool:
+          vmImage: 'ubuntu-latest'
+        environment: 'dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+                - task: AzureKeyVault@2
+                  inputs:
+                    connectedServiceName: 'YourAzureServiceConnection'
+                    keyVaultName: 'your-keyvault-dev'
+                    secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
+                - task: ReplaceToken@6
+                  inputs:
+                    targetFiles: '**/*.env.production'
+                    encoding: 'auto'
+                    actionOnMissing: 'warn'
+                    keepToken: false
+                - task: AzureWebAppContainer@1
+                  inputs:
+                    azureSubscription: 'YourAzureServiceConnection'
+                    appName: 'your-app-name-dev'
+                    containers: '$(dockerRegistry)/$(imageRepository):$(buildId)'
+                    containerPort: $(containerPort)
+
+  - stage: Deploy_Test
+    displayName: Deploy to Test
+    dependsOn: Build
+    jobs:
+      - deployment: DeployTest
+        pool:
+          vmImage: 'ubuntu-latest'
+        environment: 'test'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+                - task: AzureKeyVault@2
+                  inputs:
+                    connectedServiceName: 'YourAzureServiceConnection'
+                    keyVaultName: 'your-keyvault-test'
+                    secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
+                - task: ReplaceToken@6
+                  inputs:
+                    targetFiles: '**/*.env.production'
+                    encoding: 'auto'
+                    actionOnMissing: 'warn'
+                    keepToken: false
+                - task: AzureWebAppContainer@1
+                  inputs:
+                    azureSubscription: 'YourAzureServiceConnection'
+                    appName: 'your-app-name-test'
+                    containers: '$(dockerRegistry)/$(imageRepository):$(buildId)'
+                    containerPort: $(containerPort)
+
+  - stage: Deploy_Prod
+    displayName: Deploy to Prod
+    dependsOn: Build
+    jobs:
+      - deployment: DeployProd
+        pool:
+          vmImage: 'ubuntu-latest'
+        environment: 'prod'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+                - task: AzureKeyVault@2
+                  inputs:
+                    connectedServiceName: 'YourAzureServiceConnection'
+                    keyVaultName: 'your-keyvault-prod'
+                    secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
+                - task: ReplaceToken@6
+                  inputs:
+                    targetFiles: '**/*.env.production'
+                    encoding: 'auto'
+                    actionOnMissing: 'warn'
+                    keepToken: false
+                - task: AzureWebAppContainer@1
+                  inputs:
+                    azureSubscription: 'YourAzureServiceConnection'
+                    appName: 'your-app-name-prod'
+                    containers: '$(dockerRegistry)/$(imageRepository):$(buildId)'
+                    containerPort: $(containerPort)
