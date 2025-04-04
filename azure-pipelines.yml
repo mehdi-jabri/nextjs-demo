@@ -3,13 +3,25 @@ trigger:
     include:
       - main
 
+parameters:
+  - name: environment
+    type: string
+    default: 'dev'
+    values:
+      - dev
+      - test
+      - prod
+
 variables:
-  # Name of the Docker registry service connection defined in Azure DevOps
+  # Docker registry and image settings
   dockerRegistryServiceConnection: 'YourDockerRegistryServiceConnection'
   dockerRegistry: 'yourregistry.azurecr.io'
   imageRepository: 'next-auth-azure-app'
   containerPort: '3000'
   buildId: $(Build.BuildId)
+  # Environment-specific variables (adjust as needed)
+  keyVaultName: 'your-keyvault-$(parameters.environment)'
+  appName: 'your-app-name-$(parameters.environment)'
 
 stages:
   - stage: Build
@@ -24,11 +36,12 @@ stages:
               versionSpec: '18.x'
             displayName: 'Install Node.js'
           - script: |
-              npm install
-              npm run build
+              npm install -g pnpm
+              pnpm install
+              pnpm run build
             displayName: 'Install dependencies and build'
           - task: Docker@2
-            displayName: 'Build Docker Image'
+            displayName: 'Build and Push Docker Image'
             inputs:
               containerRegistry: $(dockerRegistryServiceConnection)
               repository: $(dockerRegistry)/$(imageRepository)
@@ -41,14 +54,14 @@ stages:
               targetPath: '$(Build.ArtifactStagingDirectory)'
               artifact: 'drop'
 
-  - stage: Deploy_Dev
-    displayName: Deploy to Dev
+  - stage: Deploy
+    displayName: Deploy to $(parameters.environment)
     dependsOn: Build
     jobs:
-      - deployment: DeployDev
+      - deployment: DeployStage
         pool:
           vmImage: 'ubuntu-latest'
-        environment: 'dev'
+        environment: '$(parameters.environment)'
         strategy:
           runOnce:
             deploy:
@@ -58,7 +71,7 @@ stages:
                 - task: AzureKeyVault@2
                   inputs:
                     connectedServiceName: 'YourAzureServiceConnection'
-                    keyVaultName: 'your-keyvault-dev'
+                    keyVaultName: $(keyVaultName)
                     secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
                 - task: ReplaceToken@6
                   inputs:
@@ -69,70 +82,6 @@ stages:
                 - task: AzureWebAppContainer@1
                   inputs:
                     azureSubscription: 'YourAzureServiceConnection'
-                    appName: 'your-app-name-dev'
-                    containers: '$(dockerRegistry)/$(imageRepository):$(buildId)'
-                    containerPort: $(containerPort)
-
-  - stage: Deploy_Test
-    displayName: Deploy to Test
-    dependsOn: Build
-    jobs:
-      - deployment: DeployTest
-        pool:
-          vmImage: 'ubuntu-latest'
-        environment: 'test'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - download: current
-                  artifact: drop
-                - task: AzureKeyVault@2
-                  inputs:
-                    connectedServiceName: 'YourAzureServiceConnection'
-                    keyVaultName: 'your-keyvault-test'
-                    secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
-                - task: ReplaceToken@6
-                  inputs:
-                    targetFiles: '**/*.env.production'
-                    encoding: 'auto'
-                    actionOnMissing: 'warn'
-                    keepToken: false
-                - task: AzureWebAppContainer@1
-                  inputs:
-                    azureSubscription: 'YourAzureServiceConnection'
-                    appName: 'your-app-name-test'
-                    containers: '$(dockerRegistry)/$(imageRepository):$(buildId)'
-                    containerPort: $(containerPort)
-
-  - stage: Deploy_Prod
-    displayName: Deploy to Prod
-    dependsOn: Build
-    jobs:
-      - deployment: DeployProd
-        pool:
-          vmImage: 'ubuntu-latest'
-        environment: 'prod'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - download: current
-                  artifact: drop
-                - task: AzureKeyVault@2
-                  inputs:
-                    connectedServiceName: 'YourAzureServiceConnection'
-                    keyVaultName: 'your-keyvault-prod'
-                    secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
-                - task: ReplaceToken@6
-                  inputs:
-                    targetFiles: '**/*.env.production'
-                    encoding: 'auto'
-                    actionOnMissing: 'warn'
-                    keepToken: false
-                - task: AzureWebAppContainer@1
-                  inputs:
-                    azureSubscription: 'YourAzureServiceConnection'
-                    appName: 'your-app-name-prod'
+                    appName: $(appName)
                     containers: '$(dockerRegistry)/$(imageRepository):$(buildId)'
                     containerPort: $(containerPort)
