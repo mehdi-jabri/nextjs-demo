@@ -1,55 +1,118 @@
-- stage: Deploy_Prod
-  displayName: Deploy to Prod
-  dependsOn: Build
-  jobs:
-    - deployment: DeployProd
-      pool:
-        vmImage: 'ubuntu-latest'
-      environment: 'prod'
-      strategy:
-        runOnce:
-          deploy:
-            steps:
-              - download: current
-                artifact: drop
-              # Fetch secrets from Azure Key Vault
-              - task: AzureKeyVault@2
-                displayName: 'Fetch secrets from Azure Key Vault'
-                inputs:
-                  connectedServiceName: 'YourAzureServiceConnection'
-                  keyVaultName: 'your-keyvault-prod'
-                  secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
+trigger:
+  branches:
+    include:
+      - main
 
-              # Replace tokens in Helm chart template files (e.g., secret.yaml)
-              - task: ReplaceToken@6
-                displayName: 'Replace tokens in Helm secret template'
-                inputs:
-                  targetFiles: 'helm/nextjs-app/values.yaml'
-                  encoding: 'auto'
-                  actionOnMissing: 'warn'
-                  keepToken: false
+parameters:
+  - name: environment
+    type: string
+    default: 'dev'
+    values:
+      - dev
+      - test
+      - prod
 
-              # Install Helm (if not already installed)
-              - task: HelmInstaller@1
-                displayName: 'Install Helm'
-                inputs:
-                  helmVersionToInstall: 'latest'
+variables:
+  # Docker registry and image settings
+  dockerRegistryServiceConnection: 'YourDockerRegistryServiceConnection'
+  dockerRegistry: 'yourregistry.azurecr.io'
+  imageRepository: 'next-auth-azure-app'
+  containerPort: '3000'
+  buildId: $(Build.BuildId)
+  # Environment-specific variables
+  keyVaultName: 'your-keyvault-$(parameters.environment)'
+  aksResourceGroup: 'your-aks-resource-group'
+  aksClusterName: 'your-aks-cluster-name'
+  releaseName: 'nextjs-app-$(parameters.environment)'
 
-              # Deploy the Helm chart to AKS
-              - task: HelmDeploy@0
-                displayName: 'Deploy Helm Chart to AKS'
-                inputs:
-                  connectionType: 'Azure Resource Manager'
-                  azureSubscription: 'YourAzureServiceConnection'
-                  azureResourceGroup: 'your-aks-resource-group'
-                  kubernetesCluster: 'your-aks-cluster-name'
-                  namespace: 'default'
-                  command: 'upgrade'
-                  chartType: 'FilePath'
-                  chartPath: 'helm/nextjs-app'
-                  releaseName: 'nextjs-app-prod'
-                  install: true
-                  overrideValues: |
-                    image.repository=$(dockerRegistry)/$(imageRepository)
-                    image.tag=$(buildId)
-                    service.targetPort=$(containerPort)
+stages:
+  - stage: Build
+    displayName: Build Stage
+    jobs:
+      - job: Build
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '18.x'
+            displayName: 'Install Node.js'
+          - script: |
+              npm install -g pnpm
+              pnpm install
+              pnpm run build
+            displayName: 'Install dependencies and build'
+          - task: Docker@2
+            displayName: 'Build and Push Docker Image'
+            inputs:
+              containerRegistry: $(dockerRegistryServiceConnection)
+              repository: $(dockerRegistry)/$(imageRepository)
+              command: 'buildAndPush'
+              Dockerfile: 'Dockerfile'
+              tags: |
+                $(buildId)
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)'
+              artifact: 'drop'
+
+  - stage: Deploy
+    displayName: Deploy to $(parameters.environment)
+    dependsOn: Build
+    jobs:
+      - deployment: DeployStage
+        pool:
+          vmImage: 'ubuntu-latest'
+        environment: 'aks-$(parameters.environment)'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+
+                # Retrieve secrets from Azure Key Vault
+                - task: AzureKeyVault@2
+                  displayName: 'Fetch Azure AD secrets from Key Vault'
+                  inputs:
+                    connectedServiceName: 'YourAzureServiceConnection'
+                    keyVaultName: $(keyVaultName)
+                    secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
+
+                # Create Kubernetes secret using a simple create command
+                - task: Kubernetes@1
+                  displayName: 'Create Kubernetes Secret for Azure AD'
+                  inputs:
+                    connectionType: 'Azure Resource Manager'
+                    azureSubscription: 'YourAzureServiceConnection'
+                    azureResourceGroup: $(aksResourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: 'default'
+                    command: 'create'
+                    arguments: 'secret generic nextjs-app-azure-ad-secrets --from-literal=AZURE_AD_CLIENT_ID=$(AZURE_AD_CLIENT_ID) --from-literal=AZURE_AD_CLIENT_SECRET=$(AZURE_AD_CLIENT_SECRET) --from-literal=AZURE_AD_TENANT_ID=$(AZURE_AD_TENANT_ID)'
+
+                # Install Helm if needed
+                - task: HelmInstaller@1
+                  displayName: 'Install Helm'
+                  inputs:
+                    helmVersionToInstall: 'latest'
+
+                # Deploy the Helm chart to AKS
+                - task: HelmDeploy@0
+                  displayName: 'Deploy Helm Chart to AKS'
+                  inputs:
+                    connectionType: 'Azure Resource Manager'
+                    azureSubscription: 'YourAzureServiceConnection'
+                    azureResourceGroup: $(aksResourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: 'default'
+                    command: 'upgrade'
+                    chartType: 'FilePath'
+                    chartPath: 'helm/nextjs-app'
+                    releaseName: $(releaseName)
+                    install: true
+                    overrideValues: |
+                      image.repository=$(dockerRegistry)/$(imageRepository)
+                      image.tag=$(buildId)
+                      service.targetPort=$(containerPort)
+  
