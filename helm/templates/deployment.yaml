@@ -4,32 +4,76 @@ metadata:
   name: {{ include "nextjs-app.fullname" . }}
   labels:
     app: {{ include "nextjs-app.name" . }}
-    chart: {{ include "nextjs-app.chart" . }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       app: {{ include "nextjs-app.name" . }}
-      release: {{ .Release.Name }}
   template:
     metadata:
       labels:
         app: {{ include "nextjs-app.name" . }}
-        release: {{ .Release.Name }}
     spec:
+      # Init container to generate the .env.production file from secret values
+      initContainers:
+        - name: init-env
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              echo "AZURE_AD_CLIENT_ID=$(AZURE_AD_CLIENT_ID)" > /env/.env.production
+              echo "AZURE_AD_CLIENT_SECRET=$(AZURE_AD_CLIENT_SECRET)" >> /env/.env.production
+              echo "AZURE_AD_TENANT_ID=$(AZURE_AD_TENANT_ID)" >> /env/.env.production
+          env:
+            - name: AZURE_AD_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName }}
+                  key: AZURE_AD_CLIENT_ID
+            - name: AZURE_AD_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName }}
+                  key: AZURE_AD_CLIENT_SECRET
+            - name: AZURE_AD_TENANT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName }}
+                  key: AZURE_AD_TENANT_ID
+          volumeMounts:
+            - name: env-volume
+              mountPath: /env
       containers:
-        - name: {{ include "nextjs-app.name" . }}
+        - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.service.targetPort }}
+          # Mount the generated .env.production file into the application directory
+          volumeMounts:
+            - name: env-volume
+              mountPath: /app/.env.production
+              subPath: .env.production
           resources:
-            {{ toYaml .Values.resources | indent 12 }}
-      nodeSelector:
-        {{ toYaml .Values.nodeSelector | indent 8 }}
-      tolerations:
-        {{ toYaml .Values.tolerations | indent 8 }}
-      affinity:
-        {{ toYaml .Values.affinity | indent 8 }}
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+      volumes:
+        - name: env-volume
+          emptyDir: {}

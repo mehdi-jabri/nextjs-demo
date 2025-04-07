@@ -71,7 +71,7 @@ stages:
                 - download: current
                   artifact: drop
 
-                # Retrieve secrets from Azure Key Vault
+                # Retrieve individual secrets from Azure Key Vault as environment variables
                 - task: AzureKeyVault@2
                   displayName: 'Fetch Azure AD secrets from Key Vault'
                   inputs:
@@ -79,25 +79,13 @@ stages:
                     keyVaultName: $(keyVaultName)
                     secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
 
-                # Create Kubernetes secret using a simple create command
-                - task: Kubernetes@1
-                  displayName: 'Create Kubernetes Secret for Azure AD'
-                  inputs:
-                    connectionType: 'Azure Resource Manager'
-                    azureSubscription: 'YourAzureServiceConnection'
-                    azureResourceGroup: $(aksResourceGroup)
-                    kubernetesCluster: $(aksClusterName)
-                    namespace: 'default'
-                    command: 'create'
-                    arguments: 'secret generic nextjs-app-azure-ad-secrets --from-literal=AZURE_AD_CLIENT_ID=$(AZURE_AD_CLIENT_ID) --from-literal=AZURE_AD_CLIENT_SECRET=$(AZURE_AD_CLIENT_SECRET) --from-literal=AZURE_AD_TENANT_ID=$(AZURE_AD_TENANT_ID)'
-
                 # Install Helm if needed
                 - task: HelmInstaller@1
                   displayName: 'Install Helm'
                   inputs:
                     helmVersionToInstall: 'latest'
 
-                # Deploy the Helm chart to AKS
+                # Deploy the Helm chart to AKS with individual environment variable overrides
                 - task: HelmDeploy@0
                   displayName: 'Deploy Helm Chart to AKS'
                   inputs:
@@ -114,5 +102,8 @@ stages:
                     overrideValues: |
                       image.repository=$(dockerRegistry)/$(imageRepository)
                       image.tag=$(buildId)
+                      image.pullPolicy=Always
                       service.targetPort=$(containerPort)
-  
+                      env.AZURE_AD_CLIENT_ID=$(AZURE_AD_CLIENT_ID)
+                      env.AZURE_AD_CLIENT_SECRET=$(AZURE_AD_CLIENT_SECRET)
+                      env.AZURE_AD_TENANT_ID=$(AZURE_AD_TENANT_ID)

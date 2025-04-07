@@ -10,10 +10,7 @@ service:
   port: 80
   targetPort: 3000
 
-secrets:
-  azureAdClientId: "#{AZURE_AD_CLIENT_ID}#"
-  azureAdClientSecret: "#{AZURE_AD_CLIENT_SECRET}#"
-  azureAdTenantId: "#{AZURE_AD_TENANT_ID}#"
+envSecretName: nextjs-app-azure-ad-secrets
 
 ingress:
   enabled: false
