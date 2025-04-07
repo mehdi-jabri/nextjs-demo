@@ -19,9 +19,11 @@ variables:
   imageRepository: 'next-auth-azure-app'
   containerPort: '3000'
   buildId: $(Build.BuildId)
-  # Environment-specific variables (adjust as needed)
+  # Environment-specific variables
   keyVaultName: 'your-keyvault-$(parameters.environment)'
-  appName: 'your-app-name-$(parameters.environment)'
+  aksResourceGroup: 'your-aks-resource-group'
+  aksClusterName: 'your-aks-cluster-name'
+  releaseName: 'next-auth-azure-app-$(parameters.environment)'
 
 stages:
   - stage: Build
@@ -61,7 +63,8 @@ stages:
       - deployment: DeployStage
         pool:
           vmImage: 'ubuntu-latest'
-        environment: '$(parameters.environment)'
+        # Use an environment name that corresponds to your AKS deployment (you can also set up approvals here)
+        environment: 'aks-$(parameters.environment)'
         strategy:
           runOnce:
             deploy:
@@ -75,13 +78,25 @@ stages:
                     secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
                 - task: ReplaceToken@6
                   inputs:
-                    targetFiles: '**/*.env.production'
+                    targetFiles: 'helm/next-auth-azure-app/values.yaml'
                     encoding: 'auto'
                     actionOnMissing: 'warn'
                     keepToken: false
-                - task: AzureWebAppContainer@1
+                - task: HelmInstaller@1
                   inputs:
+                    helmVersionToInstall: 'latest'
+                - task: HelmDeploy@0
+                  inputs:
+                    connectionType: 'Azure Resource Manager'
                     azureSubscription: 'YourAzureServiceConnection'
-                    appName: $(appName)
-                    containers: '$(dockerRegistry)/$(imageRepository):$(buildId)'
-                    containerPort: $(containerPort)
+                    azureResourceGroup: $(aksResourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: 'default'
+                    command: 'upgrade'
+                    chartType: 'FilePath'
+                    chartPath: 'helm/next-auth-azure-app'
+                    releaseName: $(releaseName)
+                    install: true
+                    overrideValues: |
+                      image.repository=$(dockerRegistry)/$(imageRepository)
+                      image.tag=$(buildId)

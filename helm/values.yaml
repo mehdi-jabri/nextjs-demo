@@ -1,0 +1,28 @@
+replicaCount: 2
+
+image:
+  repository: yourregistry.azurecr.io/next-auth-azure-app
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+ingress:
+  enabled: false
+  annotations: {}
+  hosts:
+    - host: yourdomain.example.com
+      paths:
+        - /
+  tls: []
+
+resources: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
