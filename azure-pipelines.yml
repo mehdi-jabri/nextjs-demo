@@ -24,7 +24,7 @@
               - task: ReplaceToken@6
                 displayName: 'Replace tokens in Helm secret template'
                 inputs:
-                  targetFiles: 'helm/nextjs-app/templates/secret.yaml'
+                  targetFiles: 'helm/nextjs-app/values.yaml'
                   encoding: 'auto'
                   actionOnMissing: 'warn'
                   keepToken: false
