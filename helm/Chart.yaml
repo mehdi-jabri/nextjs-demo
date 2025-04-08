@@ -1,6 +1,6 @@
 apiVersion: v2
 name: nextjs-app
-description: A Helm chart for deploying a Next.js application.
+description: A Helm chart for deploying Next.js applications on Kubernetes
 type: application
 version: 0.1.0
-appVersion: "1.0"
+appVersion: "1.0.0"

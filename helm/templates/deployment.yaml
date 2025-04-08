@@ -3,77 +3,81 @@ kind: Deployment
 metadata:
   name: {{ include "nextjs-app.fullname" . }}
   labels:
-    app: {{ include "nextjs-app.name" . }}
+    {{- include "nextjs-app.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app: {{ include "nextjs-app.name" . }}
+      {{- include "nextjs-app.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       labels:
-        app: {{ include "nextjs-app.name" . }}
+        {{- include "nextjs-app.selectorLabels" . | nindent 8 }}
     spec:
-      # Init container to generate the .env.production file from secret values
-      initContainers:
-        - name: init-env
-          image: busybox
-          command:
-            - sh
-            - -c
-            - |
-              echo "AZURE_AD_CLIENT_ID=$(AZURE_AD_CLIENT_ID)" > /env/.env.production
-              echo "AZURE_AD_CLIENT_SECRET=$(AZURE_AD_CLIENT_SECRET)" >> /env/.env.production
-              echo "AZURE_AD_TENANT_ID=$(AZURE_AD_TENANT_ID)" >> /env/.env.production
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "nextjs-app.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          # Environment variables from Secret
           env:
+            {{- if .Values.existingSecret.enabled }}
             - name: AZURE_AD_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.envSecretName }}
+                  name: {{ .Values.existingSecret.name }}
                   key: AZURE_AD_CLIENT_ID
             - name: AZURE_AD_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.envSecretName }}
+                  name: {{ .Values.existingSecret.name }}
                   key: AZURE_AD_CLIENT_SECRET
-            - name: AZURE_AD_TENANT_ID
+            {{- else }}
+            - name: AZURE_AD_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.envSecretName }}
-                  key: AZURE_AD_TENANT_ID
-          volumeMounts:
-            - name: env-volume
-              mountPath: /env
-      containers:
-        - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          ports:
-            - containerPort: {{ .Values.service.targetPort }}
-          # Mount the generated .env.production file into the application directory
-          volumeMounts:
-            - name: env-volume
-              mountPath: /app/.env.production
-              subPath: .env.production
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
+                  name: {{ .Values.secret.name | default (include "nextjs-app.fullname" .) }}
+                  key: AZURE_AD_CLIENT_ID
+            - name: AZURE_AD_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.name | default (include "nextjs-app.fullname" .) }}
+                  key: AZURE_AD_CLIENT_SECRET
+            {{- end }}
+          # Health checks
           livenessProbe:
             httpGet:
-              path: /health
-              port: {{ .Values.service.targetPort }}
-            initialDelaySeconds: 30
-            periodSeconds: 10
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            successThreshold: {{ .Values.probes.liveness.successThreshold }}
           readinessProbe:
             httpGet:
-              path: /health
-              port: {{ .Values.service.targetPort }}
-            initialDelaySeconds: 15
-            periodSeconds: 5
-      volumes:
-        - name: env-volume
-          emptyDir: {}
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

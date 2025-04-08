@@ -73,13 +73,22 @@ stages:
 
                 # Retrieve individual secrets from Azure Key Vault as environment variables
                 - task: AzureKeyVault@2
-                  displayName: 'Fetch Azure AD secrets from Key Vault'
+                  displayName: 'Fetch secrets from Azure Key Vault'
                   inputs:
                     connectedServiceName: 'YourAzureServiceConnection'
                     keyVaultName: $(keyVaultName)
                     secretsFilter: 'AZURE_AD_CLIENT_ID,AZURE_AD_CLIENT_SECRET,AZURE_AD_TENANT_ID'
 
-                # Install Helm if needed
+                # Replace tokens in Helm chart template files (e.g., secret.yaml)
+                - task: ReplaceToken@6
+                  displayName: 'Replace tokens in Helm secret template'
+                  inputs:
+                    targetFiles: 'helm/nextjs-app/templates/secret.yaml'
+                    encoding: 'auto'
+                    actionOnMissing: 'warn'
+                    keepToken: false
+
+                # Install Helm (if not already installed)
                 - task: HelmInstaller@1
                   displayName: 'Install Helm'
                   inputs:
@@ -102,8 +111,5 @@ stages:
                     overrideValues: |
                       image.repository=$(dockerRegistry)/$(imageRepository)
                       image.tag=$(buildId)
-                      image.pullPolicy=Always
                       service.targetPort=$(containerPort)
-                      env.AZURE_AD_CLIENT_ID=$(AZURE_AD_CLIENT_ID)
-                      env.AZURE_AD_CLIENT_SECRET=$(AZURE_AD_CLIENT_SECRET)
-                      env.AZURE_AD_TENANT_ID=$(AZURE_AD_TENANT_ID)
+

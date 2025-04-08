@@ -1,27 +1,82 @@
 replicaCount: 2
 
 image:
-  repository: yourregistry.azurecr.io/next-auth-azure-app
+  repository: your-registry/nextjs-app
+  tag: latest
   pullPolicy: IfNotPresent
-  tag: "latest"
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+
+securityContext: {}
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 200m
+    memory: 256Mi
 
 service:
   type: ClusterIP
   port: 80
   targetPort: 3000
 
-envSecretName: nextjs-app-azure-ad-secrets
+# Secret configuration
+secret:
+  create: true
+  name: nextjs-auth-secret
+  data:
+    AZURE_AD_CLIENT_ID: ""
+    AZURE_AD_CLIENT_SECRET: ""
+
+# For using existing secret
+existingSecret:
+  enabled: false
+  name: ""
+
+# Health probes
+probes:
+  liveness:
+    path: /api/health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  readiness:
+    path: /api/health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
 
 ingress:
-  enabled: false
-  annotations: {}
+  enabled: true
+  className: "nginx"
+  name: ""  # Custom ingress name
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
   hosts:
-    - host: yourdomain.example.com
+    - host: nextjs-app.example.com
       paths:
-        - /
-  tls: []
-
-resources: {}
-nodeSelector: {}
-tolerations: []
-affinity: {}
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: nextjs-app-tls
+      hosts:
+        - nextjs-app.example.com

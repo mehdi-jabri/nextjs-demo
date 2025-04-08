@@ -1,26 +1,62 @@
 {{/*
-Return the chart name.
+Expand the name of the chart.
 */}}
 {{- define "nextjs-app.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
 
 {{/*
-Return the fully qualified name of the app.
-If fullnameOverride is defined in values, that value is used.
-Otherwise, the release name is appended to the chart name.
+Create a default fully qualified app name.
+We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
+If release name contains chart name it will be used as a full name.
 */}}
 {{- define "nextjs-app.fullname" -}}
-{{- if .Values.fullnameOverride -}}
-  {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-  {{- printf "%s-%s" .Release.Name (include "nextjs-app.name" .) | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-{{- end -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- end }}
 
 {{/*
-Return the chart name and version, used for labeling.
+Create chart name and version as used by the chart label.
 */}}
 {{- define "nextjs-app.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "." "-" | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Common labels
+*/}}
+{{- define "nextjs-app.labels" -}}
+helm.sh/chart: {{ include "nextjs-app.chart" . }}
+{{ include "nextjs-app.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Selector labels
+*/}}
+{{- define "nextjs-app.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "nextjs-app.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Create the name of the service account to use
+*/}}
+{{- define "nextjs-app.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "nextjs-app.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
