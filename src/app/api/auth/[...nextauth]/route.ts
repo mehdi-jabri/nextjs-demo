@@ -13,6 +13,11 @@ export const authOptions: NextAuthOptions = {
       clientId: process.env.AZURE_AD_CLIENT_ID!,
       clientSecret: process.env.AZURE_AD_CLIENT_SECRET!,
       tenantId: process.env.AZURE_AD_TENANT_ID!,
+      authorization: {
+        params: {
+          scope: process.env.NEXT_PUBLIC_AUTH_SCOPE || "openid profile email https://nextjs-app.example.com",
+        },
+      }
     }),
   ],
   callbacks: {
