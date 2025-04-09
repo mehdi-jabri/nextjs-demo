@@ -68,9 +68,21 @@ ingress:
   name: ""  # Custom ingress name
   annotations:
     kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"  # Force HTTPS
     nginx.ingress.kubernetes.io/use-regex: "true"
     nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # Forward as HTTP to backend service after TLS termination
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    # Timeout settings for Next.js
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "180"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "180"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "180"
+    # Important header forwarding with TLS termination
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header Host $host;
   hosts:
     - host: nextjs-app.example.com
       paths:

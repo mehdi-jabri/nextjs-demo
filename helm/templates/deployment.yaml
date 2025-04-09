@@ -37,6 +37,12 @@ spec:
               protocol: TCP
           # Environment variables from Secret
           env:
+            # Next.js proxy configuration
+            - name: NEXT_PUBLIC_APP_URL
+              value: {{ index .Values.ingress.hosts 0 "host" | default "localhost" | quote }}
+            # Trust the X-Forwarded-Proto header from the ingress
+            - name: NEXT_PRIVATE_FORWARDED_HEADERS_ENABLED
+              value: "true"
             {{- if .Values.existingSecret.enabled }}
             - name: AZURE_AD_CLIENT_ID
               valueFrom:
