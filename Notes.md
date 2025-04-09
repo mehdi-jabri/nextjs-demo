@@ -1,207 +1,480 @@
-# Question
-Act as Azure, nextjs, spring boot, Auth2 expert. Provide a solution for the authentication and authorization worflow for the use case below
-- A web application (NextJs) that is registered as web-1 and has app roles Admin, Role1 and Role2 in Microsofot entra
-- A backend that  (Spring boot) that is registred as api-1 has app roles API1:READ and API1:WRITE in Microsoft entra
-- A backend that  (Spring boot) that is registred as api-2 has app roles API2:READ and API2:WRITE and API2:ALL in Microsoft entra
-- The Admin users in the frontend should be able to have functionnalities API1:READ and API1:WRITE and API2: ALL
-- The Role1 user group in the frontend should be able to have functionnalities API1:READ and API2:READ
-- The Role2 user group in the frontend should be able to have functionnalities API1:READ and API1:WRITE and API2:READ
+# Setting up Azure AD Authentication in Next.js for Production
 
-# Response
-Below is a detailed solution outlining how to design the authentication and authorization workflow using Microsoft Entra (Azure AD), a NextJs frontend, and two Spring Boot backend APIs. This solution covers the registration of apps in Microsoft Entra, token issuance (including delegated permissions and the on‐behalf‐of flow), and role-based access control in both the frontend and backend.
+This guide provides a comprehensive setup for implementing Azure AD authentication in a Next.js application, following the latest best practices for production environments.
 
----
+## 1. Project Structure
 
-## 1. Overview and Architecture
+Your Next.js project should have the following structure for authentication:
 
-### High-Level Flow
-1. **User Authentication:**
-    - A user accesses the NextJs web application (registered as **web-1**) and signs in via Azure AD using OpenID Connect.
-    - During sign-in, Azure AD issues an ID token that contains the user’s claims, including one or more **app roles** (e.g. Admin, Role1, or Role2).
+```
+my-nextjs-app/
+├── app/
+│   ├── api/
+│   │   └── auth/
+│   │       └── [...nextauth]/
+│   │           └── route.ts
+│   ├── auth/
+│   │   └── signin/
+│   │       └── page.tsx
+│   ├── layout.tsx
+│   └── page.tsx
+├── components/
+│   ├── auth/
+│   │   └── LoginButton.tsx
+│   └── providers/
+│       └── AuthProvider.tsx
+├── types/
+│   └── next-auth.d.ts
+├── .env.local
+├── .env.production
+└── next.config.js
+```
 
-2. **Token Acquisition for API Calls:**
-    - Once authenticated, the NextJs application uses the acquired token to perform an **on‐behalf‐of (OBO) flow** to request access tokens for the backend APIs.
-    - When performing the OBO flow, the app requests tokens for:
-        - **api-1** (Spring Boot, with app roles API1:READ and API1:WRITE)
-        - **api-2** (Spring Boot, with app roles API2:READ, API2:WRITE, and API2:ALL)
+## 2. Environment Variables
 
-3. **Role Mapping and API Access:**
-    - **Admin users** in web-1 are mapped to have the permissions: API1:READ, API1:WRITE, and API2:ALL.
-    - **Role1 users** are mapped to have API1:READ and API2:READ.
-    - **Role2 users** are mapped to have API1:READ, API1:WRITE, and API2:READ.
-    - The issued access tokens (which may include custom claims via optional claims or through token transformation) embed the necessary roles/scopes.
-    - When a token is sent to an API, Spring Boot’s resource server configuration validates the token and checks for the required roles before granting access to protected endpoints.
+Create a `.env.local` file for local development and a `.env.production` file for production:
 
-4. **Spring Boot API Authorization:**
-    - Each backend (api-1 and api-2) is configured as an OAuth2 resource server.
-    - The APIs use Spring Security annotations (or similar mechanisms) to protect endpoints, ensuring that only tokens with the correct role claims (e.g., “API1:WRITE”, “API2:ALL”) can access particular functionality.
+```
+# .env.local or .env.production
+NEXTAUTH_URL=https://your-app-domain.com
+NEXTAUTH_SECRET=your-secure-nextauth-secret
 
----
+# Azure AD credentials
+AZURE_AD_CLIENT_ID=your-azure-client-id
+AZURE_AD_CLIENT_SECRET=your-azure-client-secret
+AZURE_AD_TENANT_ID=your-azure-tenant-id
 
-## 2. Microsoft Entra (Azure AD) Setup
+# Optional: Define the scope needed for your app
+AZURE_AD_SCOPE="openid profile email https://your-app-domain.com/.default"
+```
 
-### App Registrations and Role Definitions
+In production deployments, ensure these environment variables are securely injected into your container/environment.
 
-#### **Frontend App – web-1**
-- **Registration:** Create an app registration named **web-1**.
-- **App Roles:**
-    - Define roles such as **Admin**, **Role1**, and **Role2**.
-    - When a user is assigned one of these roles (via Azure AD’s Enterprise Applications), the corresponding role claim will be included in the token.
-- **Permissions:**
-    - Configure web-1 to request delegated permissions for both backend APIs (api-1 and api-2).
+## 3. NextAuth Configuration
 
-#### **Backend API – api-1**
-- **Registration:** Create an app registration named **api-1**.
-- **Expose an API:**
-    - Define the scopes (or app roles) such as **API1:READ** and **API1:WRITE**.
-- **Role Validation:**
-    - Configure the application manifest to include these roles.
+Create the NextAuth API route handler at `app/api/auth/[...nextauth]/route.ts`:
 
-#### **Backend API – api-2**
-- **Registration:** Create an app registration named **api-2**.
-- **Expose an API:**
-    - Define scopes/app roles: **API2:READ**, **API2:WRITE**, and **API2:ALL**.
-- **Role Validation:**
-    - Similarly, update the manifest to include these roles.
+```typescript
+import NextAuth from "next-auth";
+import AzureADProvider from "next-auth/providers/azure-ad";
+import type { NextAuthOptions, Session } from "next-auth";
+import type { JWT } from "next-auth/jwt";
 
-### Role Assignment and Mapping
-- **Mapping User Roles to API Permissions:**
-    - **Admin**: In Azure AD, assign Admin users (or groups) in web-1 with the Admin role. In token exchange, map this role to include access tokens with both **API1:READ/API1:WRITE** and **API2:ALL**.
-    - **Role1**: When a user has the Role1 role, map the access token to include **API1:READ** and **API2:READ**.
-    - **Role2**: When a user has the Role2 role, map the access token to include **API1:READ/API1:WRITE** and **API2:READ**.
+// Extend the Session type to include additional properties
+interface ExtendedSession extends Session {
+  user: Session["user"] & {
+    accessToken?: string;
+    idToken?: string;
+    roles?: string[];
+  };
+}
 
-  *This mapping can be achieved using Azure AD’s optional claims or via custom policies if using Identity Governance (B2C or conditional access). In many cases, the frontend can decide which API access token to request (or can supply hints/scopes) so that the token’s claims align with the intended permissions.*
+// Define the AzureProfile interface to type the profile response
+interface AzureProfile {
+  roles?: string[];
+  oid?: string;
+}
 
----
+// Define what additional data we want in the JWT token
+interface ExtendedJWT extends JWT {
+  accessToken?: string;
+  idToken?: string;
+  roles?: string[];
+}
 
-## 3. NextJs Frontend Implementation
+// Export the authOptions for use in other server components if needed
+export const authOptions: NextAuthOptions = {
+  secret: process.env.NEXTAUTH_SECRET,
+  
+  providers: [
+    AzureADProvider({
+      clientId: process.env.AZURE_AD_CLIENT_ID || "",
+      clientSecret: process.env.AZURE_AD_CLIENT_SECRET || "",
+      tenantId: process.env.AZURE_AD_TENANT_ID || "",
+      authorization: {
+        params: {
+          scope: process.env.AZURE_AD_SCOPE || "openid profile email",
+        },
+      },
+    }),
+  ],
+  
+  callbacks: {
+    async jwt({ token, account, profile }): Promise<ExtendedJWT> {
+      // Initial sign in
+      if (account && profile) {
+        token.accessToken = account.access_token;
+        token.idToken = account.id_token;
+        token.roles = (profile as AzureProfile)?.roles || [];
+        token.oid = (profile as AzureProfile)?.oid;
+      }
+      return token;
+    },
+    
+    async session({ session, token }): Promise<ExtendedSession> {
+      const extendedSession = session as ExtendedSession;
+      
+      // Add the token details to the session
+      extendedSession.user.accessToken = token.accessToken as string;
+      extendedSession.user.idToken = token.idToken as string;
+      extendedSession.user.roles = token.roles as string[];
+      
+      return extendedSession;
+    },
+  },
+  
+  pages: {
+    signIn: "/auth/signin",
+  },
+  
+  // For production, use secure cookies
+  cookies: {
+    sessionToken: {
+      name: `__Secure-next-auth.session-token`,
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: true,
+      },
+    },
+  },
+  
+  // Session configuration
+  session: {
+    strategy: "jwt", // Use JWT strategy for sessions
+    maxAge: 24 * 60 * 60, // 24 hours
+  },
+  
+  debug: process.env.NODE_ENV === "development",
+};
 
-### Authentication and Token Acquisition
-- **Use MSAL.js (Microsoft Authentication Library):**
-    - Integrate MSAL in your NextJs app to handle user sign-in and token management.
-    - Configure MSAL with the **web-1** app registration details (client ID, authority, redirect URIs).
+// Create and export the NextAuth handler
+const handler = NextAuth(authOptions);
+export { handler as GET, handler as POST };
+```
 
-- **Obtain ID and Access Tokens:**
-    - Upon sign-in, the ID token contains the app roles (Admin, Role1, or Role2).
-    - For calling the APIs, initiate an **on‐behalf‐of (OBO)** flow:
-        - Use the acquired ID token (or a user access token) to request separate access tokens for **api-1** and **api-2**.
-        - In the token request, include the required scopes (e.g., `api1://<api-1-client-id>/API1.Read`, `api1://<api-1-client-id>/API1.Write`, etc. and similarly for api-2).
-    - Ensure that the user’s role from the frontend is used to decide which scopes to request.
+## 4. TypeScript Type Declarations
 
-### Token Storage and API Calls
-- **Token Storage:**
-    - Store tokens in secure, httpOnly cookies or secure storage mechanisms.
-- **API Calls:**
-    - Attach the acquired access tokens in the `Authorization` header when calling the backend endpoints.
+Create a declaration file at `types/next-auth.d.ts` to extend NextAuth types:
 
----
+```typescript
+import "next-auth";
+import { JWT } from "next-auth/jwt";
 
-## 4. Spring Boot Backend Configuration
+declare module "next-auth" {
+  interface Session {
+    user: {
+      name?: string | null;
+      email?: string | null;
+      image?: string | null;
+      accessToken?: string;
+      idToken?: string;
+      roles?: string[];
+    };
+  }
+}
 
-### Configuring the Resource Servers
-For each backend API (api-1 and api-2), configure Spring Security to validate tokens issued by Azure AD.
-
-#### **Common Configuration**
-- **Dependency:**
-    - Add the Spring Boot starter for OAuth2 Resource Server (e.g., `spring-boot-starter-oauth2-resource-server`).
-- **application.yml / application.properties:**
-    - Configure the issuer URI to point to your Azure AD tenant (e.g., `https://login.microsoftonline.com/{tenant-id}/v2.0`).
-
-#### **Example (api-1):**
-
-```java
-@Configuration
-@EnableWebSecurity
-public class Api1SecurityConfig extends WebSecurityConfigurerAdapter {
-
-    @Override
-    protected void configure(HttpSecurity http) throws Exception {
-        http
-          .authorizeRequests()
-            .antMatchers("/admin/**").hasAuthority("APPROLE_API1_WRITE")
-            .antMatchers("/read/**").hasAnyAuthority("APPROLE_API1_READ", "APPROLE_API1_WRITE")
-            .anyRequest().authenticated()
-          .and()
-          .oauth2ResourceServer()
-            .jwt();
-    }
+declare module "next-auth/jwt" {
+  interface JWT {
+    accessToken?: string;
+    idToken?: string;
+    roles?: string[];
+    oid?: string;
+  }
 }
 ```
 
-> **Note:**
-> - The role names in the token might appear as claims such as `roles` or `appRoles`.
-> - You may need a custom `JwtAuthenticationConverter` to map the claim values into Spring Security authorities (e.g., prefixing with `APPROLE_`).
+## 5. Auth Provider Component
 
-#### **Mapping Token Claims to Authorities:**
-Create a custom converter if needed:
+Create an AuthProvider wrapper at `components/providers/AuthProvider.tsx`:
 
-```java
-public class AzureADJwtAuthConverter implements Converter<Jwt, AbstractAuthenticationToken> {
-    @Override
-    public AbstractAuthenticationToken convert(Jwt jwt) {
-        Collection<GrantedAuthority> authorities = new ArrayList<>();
-        // Assuming roles are in a claim named "roles" or "appRoles"
-        List<String> roles = jwt.getClaimAsStringList("roles");
-        if (roles != null) {
-            roles.forEach(role -> authorities.add(new SimpleGrantedAuthority("APPROLE_" + role.toUpperCase())));
-        }
-        return new JwtAuthenticationToken(jwt, authorities);
-    }
+```tsx
+'use client';
+
+import { SessionProvider } from "next-auth/react";
+import { ReactNode } from "react";
+
+interface AuthProviderProps {
+  children: ReactNode;
+}
+
+export default function AuthProvider({ children }: AuthProviderProps) {
+  return <SessionProvider>{children}</SessionProvider>;
 }
 ```
 
-Then configure it in your resource server setup:
+## 6. Layout Integration
 
-```java
-http.oauth2ResourceServer()
-    .jwt()
-    .jwtAuthenticationConverter(new AzureADJwtAuthConverter());
+Wrap your application in the AuthProvider in your root layout at `app/layout.tsx`:
+
+```tsx
+import AuthProvider from "@/components/providers/AuthProvider";
+import type { Metadata } from "next";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "My App with Azure AD Auth",
+  description: "Next.js application with Azure AD authentication",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
+    </html>
+  );
+}
 ```
 
-#### **Repeat for api-2:**
-- Apply a similar configuration and adjust the endpoint access rules.
-- For endpoints that require **API2:ALL** (for Admin users) versus **API2:READ** (for Role1 and Role2), ensure your method-level security or HTTP security rules verify the correct authority.
+## 7. Login Button Component
 
----
+Create a login/logout button at `components/auth/LoginButton.tsx`:
 
-## 5. End-to-End Authorization Logic
+```tsx
+'use client';
 
-### Role-to-Permission Mapping Recap
-- **Admin (web-1):**
-    - **api-1:** Must have both **API1:READ** and **API1:WRITE**.
-    - **api-2:** Must have **API2:ALL**.
+import { signIn, signOut, useSession } from "next-auth/react";
 
-- **Role1 (web-1):**
-    - **api-1:** Must have **API1:READ**.
-    - **api-2:** Must have **API2:READ**.
+export default function LoginButton() {
+  const { data: session, status } = useSession();
+  const isLoading = status === "loading";
 
-- **Role2 (web-1):**
-    - **api-1:** Must have **API1:READ** and **API1:WRITE**.
-    - **api-2:** Must have **API2:READ**.
+  if (isLoading) {
+    return <button disabled>Loading...</button>;
+  }
 
-### How to Enforce
-- **Token Issuance:**
-    - When performing the OBO flow, the NextJs app requests tokens that include the scopes corresponding to the user’s role.
-    - Azure AD then issues tokens that include the appropriate app roles for each API.
-- **Backend Authorization:**
-    - Each Spring Boot backend validates that the token contains the required authority before processing the request.
-    - For example, an endpoint that updates data in api-1 would check for the presence of **APPROLE_API1_WRITE** in the token.
-- **Frontend UI:**
-    - The NextJs app can also show/hide UI components based on the user’s role claims received in the ID token.
+  if (session) {
+    return (
+      <div>
+        <p>Signed in as {session.user?.email}</p>
+        <button onClick={() => signOut()}>Sign out</button>
+      </div>
+    );
+  }
 
----
+  return <button onClick={() => signIn("azure-ad")}>Sign in with Azure AD</button>;
+}
+```
 
-## 6. Summary and Best Practices
+## 8. Custom Sign-in Page
 
-- **Use Standard Protocols:**
-    - Utilize OpenID Connect for user authentication and OAuth2 for API access.
-- **Implement the On-Behalf-Of Flow:**
-    - This ensures that the user’s context (including their role) is propagated to the backend APIs.
-- **Custom Claim Mapping:**
-    - If the tokens do not directly contain the desired API roles, use Azure AD’s optional claims or a custom token transformer to include them.
-- **Secure Storage and Transmission:**
-    - Use secure mechanisms for storing tokens on the frontend (e.g., httpOnly cookies) and always use HTTPS for API calls.
-- **Granular API Protection:**
-    - In Spring Boot, use Spring Security’s method-level or URL-based security to enforce role-based access.
+Create a custom sign-in page at `app/auth/signin/page.tsx`:
 
-This comprehensive approach allows you to centrally manage user identities and permissions in Microsoft Entra while cleanly separating concerns between the NextJs frontend and the Spring Boot APIs. The use of standardized flows (OIDC, OAuth2, OBO) ensures secure delegation of user identity and permissions throughout your application ecosystem.
+```tsx
+'use client';
+
+import { signIn } from "next-auth/react";
+import { useSearchParams } from "next/navigation";
+import { useEffect } from "react";
+
+export default function SignIn() {
+  const searchParams = useSearchParams();
+  const callbackUrl = searchParams?.get("callbackUrl") || "/";
+  const error = searchParams?.get("error");
+
+  useEffect(() => {
+    // Auto-trigger sign-in when the page loads
+    signIn("azure-ad", { callbackUrl });
+  }, [callbackUrl]);
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center">
+      <h1 className="text-2xl font-bold mb-6">Signing you in...</h1>
+      {error && (
+        <div className="bg-red-100 p-4 rounded-md text-red-700 mb-4">
+          Authentication error: {error}
+        </div>
+      )}
+      <button
+        onClick={() => signIn("azure-ad", { callbackUrl })}
+        className="bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600"
+      >
+        Sign in with Azure AD
+      </button>
+    </div>
+  );
+}
+```
+
+## 9. Protecting Pages/Routes
+
+### Server-side protection for a page:
+
+```tsx
+// app/dashboard/page.tsx
+import { getServerSession } from "next-auth/next";
+import { redirect } from "next/navigation";
+import { authOptions } from "../api/auth/[...nextauth]/route";
+
+export default async function DashboardPage() {
+  const session = await getServerSession(authOptions);
+
+  if (!session) {
+    redirect("/api/auth/signin?callbackUrl=/dashboard");
+  }
+
+  return (
+    <div>
+      <h1>Protected Dashboard</h1>
+      <p>Welcome {session.user.name}!</p>
+      {/* Dashboard content */}
+    </div>
+  );
+}
+```
+
+### Client-side protection for a component:
+
+```tsx
+'use client';
+
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
+
+export default function ProtectedComponent() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.push("/api/auth/signin?callbackUrl=" + encodeURIComponent(window.location.href));
+    }
+  }, [status, router]);
+
+  if (status === "loading") {
+    return <div>Loading...</div>;
+  }
+
+  if (!session) {
+    return null;
+  }
+
+  return (
+    <div>
+      <h2>Protected Content</h2>
+      {/* Protected content here */}
+    </div>
+  );
+}
+```
+
+## 10. Role-Based Access Control
+
+For role-based authorization:
+
+```tsx
+'use client';
+
+import { useSession } from "next-auth/react";
+
+interface RoleGuardProps {
+  children: React.ReactNode;
+  allowedRoles: string[];
+  fallback?: React.ReactNode;
+}
+
+export default function RoleGuard({ 
+  children, 
+  allowedRoles,
+  fallback = <div>You don't have permission to view this content</div>
+}: RoleGuardProps) {
+  const { data: session } = useSession();
+  
+  if (!session) {
+    return null;
+  }
+  
+  const hasRequiredRole = session.user.roles?.some(role => 
+    allowedRoles.includes(role)
+  );
+  
+  if (!hasRequiredRole) {
+    return fallback;
+  }
+  
+  return <>{children}</>;
+}
+```
+
+## 11. NextAuth Configuration
+
+Update your `next.config.js` with any necessary configurations:
+
+```javascript
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  // Enable Edge runtime if desired
+  // experimental: {
+  //   runtime: 'edge',
+  // },
+  
+  // Add any rewrites or redirects if needed
+  async rewrites() {
+    return [
+      // Example: Rewrite auth endpoints if needed
+    ];
+  },
+};
+
+module.exports = nextConfig;
+```
+
+## 12. Docker Configuration
+
+Ensure your Dockerfile copies the environment variables for production:
+
+```dockerfile
+# Stage 1: Build
+FROM node:18-alpine AS builder
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# Copy source and build
+COPY . .
+RUN npm run build
+
+# Stage 2: Production
+FROM node:18-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV production
+
+# Copy necessary files
+COPY --from=builder /app/next.config.js ./
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/package.json ./package.json
+
+# Install production dependencies
+RUN npm ci --only=production
+
+# For production, copy ENV file if needed
+# COPY .env.production ./.env.production
+
+# Start the app
+EXPOSE 3000
+CMD ["npm", "start"]
+```
+
+Remember to use environment variables in your container orchestration platform (Kubernetes, Docker Compose, etc.) instead of copying `.env` files directly.
+
+## 13. Additional Security Considerations
+
+1. **HTTPS Only**: Ensure your app is served over HTTPS, especially in production.
+2. **Secure Cookies**: Configure secure cookies as shown in the authOptions.
+3. **Token Storage**: Use secure storage mechanisms for tokens.
+4. **Regular Token Rotation**: Implement token refresh logic if needed.
+5. **Protect API Routes**: Add authentication checks to API routes.
+6. **HTTP Headers**: Set security headers using Next.js config or middleware.
+
+By following this guide, you'll have a secure, production-ready Next.js application with Azure AD authentication.
