@@ -35,36 +35,14 @@ spec:
             - name: http
               containerPort: 3000
               protocol: TCP
-          # Environment variables from Secret
-          env:
-            # Next.js proxy configuration
-            - name: NEXT_PUBLIC_APP_URL
-              value: {{ index .Values.ingress.hosts 0 "host" | default "localhost" | quote }}
-            # Trust the X-Forwarded-Proto header from the ingress
-            - name: NEXT_PRIVATE_FORWARDED_HEADERS_ENABLED
-              value: "true"
+          # Use envFrom to mount all environment variables from secrets
+          envFrom:
             {{- if .Values.existingSecret.enabled }}
-            - name: AZURE_AD_CLIENT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.existingSecret.name }}
-                  key: AZURE_AD_CLIENT_ID
-            - name: AZURE_AD_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.existingSecret.name }}
-                  key: AZURE_AD_CLIENT_SECRET
+            - secretRef:
+                name: {{ .Values.existingSecret.name }}
             {{- else }}
-            - name: AZURE_AD_CLIENT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secret.name | default (include "nextjs-app.fullname" .) }}
-                  key: AZURE_AD_CLIENT_ID
-            - name: AZURE_AD_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secret.name | default (include "nextjs-app.fullname" .) }}
-                  key: AZURE_AD_CLIENT_SECRET
+            - secretRef:
+                name: {{ .Values.secret.name | default (include "nextjs-app.fullname" .) }}
             {{- end }}
           # Health checks
           livenessProbe:

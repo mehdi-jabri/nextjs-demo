@@ -27,6 +27,9 @@ RUN pnpm install --prod
 
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
+COPY --from=builder /app/next.config.js ./next.config.js
+# Copy .env.production if it exists
+COPY --from=builder /app/.env.production ./.env.production
 
 EXPOSE 3000
 CMD ["pnpm", "start"]

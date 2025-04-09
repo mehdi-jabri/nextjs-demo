@@ -37,8 +37,14 @@ secret:
   create: true
   name: nextjs-auth-secret
   data:
+    # Auth secrets
     AZURE_AD_CLIENT_ID: ""
     AZURE_AD_CLIENT_SECRET: ""
+    # Next.js configuration variables
+    # These will override values in .env.production when deployed to k8s
+    NEXT_PUBLIC_APP_URL: "https://nextjs-app.example.com"
+    NEXT_PRIVATE_FORWARDED_HEADERS_ENABLED: "true"
+    # Add any additional environment variables needed
 
 # For using existing secret
 existingSecret:
