@@ -480,6 +480,39 @@ Remember to use environment variables in your container orchestration platform (
 By following this guide, you'll have a secure, production-ready Next.js application with Azure AD authentication.
 
 
+```typescript
+export const authOptions: NextAuthOptions = {
+  providers: [
+    AzureADProvider({
+      clientId: process.env.AZURE_AD_CLIENT_ID || "",
+      clientSecret: process.env.AZURE_AD_CLIENT_SECRET || "",
+      tenantId: process.env.AZURE_AD_TENANT_ID || "",
+      authorization: {
+        params: {
+          scope: process.env.AZURE_AD_SCOPE || "openid profile email",
+        },
+      },
+    }),
+  ],
+  // Add these important options
+  trustHost: true,
+  useSecureCookies: true,
+  cookies: {
+    // Properly configured cookies for proxy environments
+    sessionToken: {
+      name: `__Secure-next-auth.session-token`,
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: true,
+      },
+    },
+  },
+  // Add the remaining configuration...
+};
+```
+
 ```yaml
 annotations:
   nginx.ingress.kubernetes.io/configuration-snippet: |
