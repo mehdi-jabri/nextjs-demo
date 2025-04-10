@@ -1,3 +1,94 @@
+This specific error indicates that there's an issue with how the client ID is being passed during the OAuth callback flow. When using an AKS cluster with Nginx ingress, there are some additional configurations that might be needed.
+Here are a few targeted solutions to fix this issue:
+1. Verify Redirect URI Configuration
+   Make sure your Azure AD app registration has the correct redirect URI configured. When behind an Nginx ingress, the full callback URL should be registered:
+   https://your-domain.com/api/auth/callback/azure-ad
+2. Check Proxy Headers in Nginx Ingress
+   When using Nginx ingress, sometimes the headers and protocol information get lost. Add this to your ingress configuration:
+   yamlapiVersion: networking.k8s.io/v1
+   kind: Ingress
+   metadata:
+   name: your-app-ingress
+   annotations:
+   nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"  # Increase buffer size
+   nginx.ingress.kubernetes.io/ssl-redirect: "true"
+   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+   nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+   spec:
+# rest of your ingress config
+3. Update NextAuth Configuration
+   Modify your NextAuth configuration to explicitly handle proxies:
+   typescriptexport const authOptions: NextAuthOptions = {
+   providers: [
+   AzureADProvider({
+   clientId: process.env.AZURE_AD_CLIENT_ID || "",
+   clientSecret: process.env.AZURE_AD_CLIENT_SECRET || "",
+   tenantId: process.env.AZURE_AD_TENANT_ID || "",
+   authorization: {
+   params: {
+   scope: process.env.AZURE_AD_SCOPE || "openid profile email",
+   },
+   },
+   }),
+   ],
+   // Add these important options
+   trustHost: true,
+   useSecureCookies: true,
+   cookies: {
+   // Properly configured cookies for proxy environments
+   sessionToken: {
+   name: `__Secure-next-auth.session-token`,
+   options: {
+   httpOnly: true,
+   sameSite: "lax",
+   path: "/",
+   secure: true,
+   },
+   },
+   },
+   // Add the remaining configuration...
+   };
+4. Set Proper NEXTAUTH_URL
+   Make absolutely sure that your NEXTAUTH_URL environment variable matches your actual deployed URL:
+   NEXTAUTH_URL=https://your-domain.com
+5. Add Explicit URLs
+   Try adding explicit URLs to the Azure AD provider:
+   typescriptAzureADProvider({
+   clientId: process.env.AZURE_AD_CLIENT_ID || "",
+   clientSecret: process.env.AZURE_AD_CLIENT_SECRET || "",
+   tenantId: process.env.AZURE_AD_TENANT_ID || "",
+   authorization: {
+   url: `https://login.microsoftonline.com/${process.env.AZURE_AD_TENANT_ID}/oauth2/v2.0/authorize`,
+   params: {
+   scope: process.env.AZURE_AD_SCOPE || "openid profile email",
+   },
+   },
+   token: {
+   url: `https://login.microsoftonline.com/${process.env.AZURE_AD_TENANT_ID}/oauth2/v2.0/token`,
+   },
+   userinfo: {
+   url: "https://graph.microsoft.com/oidc/userinfo",
+   },
+   })
+6. Check Environment Variables
+   Ensure environment variables aren't just defined but are actually accessible at runtime. Add this temporary debug code to your route.ts file:
+   typescriptconsole.log({
+   clientIdExists: !!process.env.AZURE_AD_CLIENT_ID,
+   clientIdLength: process.env.AZURE_AD_CLIENT_ID?.length,
+   clientSecretExists: !!process.env.AZURE_AD_CLIENT_SECRET,
+   tenantIdExists: !!process.env.AZURE_AD_TENANT_ID,
+   nextauthUrl: process.env.NEXTAUTH_URL
+   });
+7. Ensure Proper Cookie Handling by Nginx
+   If it's still not working, adjust your Nginx ingress configuration to properly handle cookies and HTTPS:
+   yamlannotations:
+   nginx.ingress.kubernetes.io/configuration-snippet: |
+   proxy_set_header X-Forwarded-Proto $scheme;
+   proxy_set_header X-Forwarded-Host $host;
+   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+   nginx.ingress.kubernetes.io/proxy-cookie-path: / /;
+   The "invalid_request The body must contain the following parameter client_id" error typically indicates the client ID isn't being passed properly in the token exchange step of the OAuth flow. These adjustments should help ensure that the entire OAuth flow, including the callback with client credentials, works correctly in your AKS cluster with Nginx ingress.
+
 # Setting up Azure AD Authentication in Next.js for Production
 
 This guide provides a comprehensive setup for implementing Azure AD authentication in a Next.js application, following the latest best practices for production environments.
