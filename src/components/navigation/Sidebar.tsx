@@ -1,3 +1,4 @@
+// components/navigation/Sidebar.tsx
 "use client";
 
 import { useState } from "react";
@@ -33,21 +34,21 @@ const navigationItems = [
 export default function Sidebar() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
 
-  // If no session exists, do not render the sidebar at all.
-  if (!session) return null;
+  // If no session exists or loading, do not render the sidebar
+  if (status === "loading" || !session) return null;
 
   const user = session.user;
 
   const hasRole = (allowedRoles: string[]) =>
-    user.roles ? allowedRoles.some((role) => user.roles.includes(role)) : false;
+    user.roles ? allowedRoles.some((role) => user.roles!.includes(role)) : false;
 
   const isActive = (path: string) =>
     path === "/" ? pathname === "/" : pathname.startsWith(path);
 
   const handleLogout = () => {
-    signOut();
+    signOut({ redirectTo: "/auth/signin" });
   };
 
   const SidebarContent = () => (
