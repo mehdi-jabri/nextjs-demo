@@ -1,110 +1,121 @@
-
-```java
-@Configuration
-@ConfigurationProperties(prefix = "my-service")
-@Data
-public class MyServiceConfig {
-    private String url;
-    private int connectTimeout = 5000; // 5 seconds
-    private int readTimeout = 10000; // 10 seconds
-    private int maxConnections = 500;
-    private int maxConnectionsPerRoute = 100;
-    private int connectionRequestTimeout = 5000; // 5 seconds
+// Main Application class
+@SpringBootApplication
+public class Application {
+public static void main(String[] args) {
+SpringApplication.run(Application.class, args);
 }
 
-@Configuration
-public class RestClientConfig {
-
-    @Autowired
-    private MyServiceConfig myServiceConfig;
-
-    @Bean("myRestClient")
-    public RestClient myRestClient(MyRequestInterceptor requestInterceptor) {
-        // Create a properly configured HttpClient with connection pooling
-        HttpClient httpClient = HttpClients.custom()
-            .setConnectionManager(poolingConnectionManager())
-            .setDefaultRequestConfig(requestConfig())
-            .setKeepAliveStrategy(connectionKeepAliveStrategy())
-            .build();
-
-        // Configure ClientHttpRequestFactory with our HTTP client
-        HttpComponentsClientHttpRequestFactory requestFactory = new HttpComponentsClientHttpRequestFactory(httpClient);
-        requestFactory.setConnectTimeout(Duration.ofMillis(myServiceConfig.getConnectTimeout()));
-        requestFactory.setReadTimeout(Duration.ofMillis(myServiceConfig.getReadTimeout()));
-
-        // Build RestClient with our configuration
-        return RestClient.builder()
-            .baseUrl(myServiceConfig.getUrl())
-            .defaultHeaders(httpHeaders -> {
-                httpHeaders.set(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE); 
-                httpHeaders.set(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
-            })
-            .defaultStatusHandler(HttpStatusCode::isError, (HttpRequest request, ClientHttpResponse response) -> {
-                throw createRemoteException(request, response).setRemoteType(RemoteErrorType.MY_SERVICE);
-            })
-            .requestInterceptor(requestInterceptor)
-            .requestFactory(requestFactory)
-            .build();
-    }
-
     @Bean
-    public MyServiceClient myServiceClient(@Qualifier("myRestClient") RestClient myRestClient) {
-        HttpServiceProxyFactory factory = HttpServiceProxyFactory
-            .builderFor(RestClientAdapter.create(myRestClient))
-            .build();
-        return factory.createClient(MyServiceClient.class);
-    }
-
-    @Bean
-    public PoolingHttpClientConnectionManager poolingConnectionManager() {
-        PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
-        connectionManager.setMaxTotal(myServiceConfig.getMaxConnections());
-        connectionManager.setDefaultMaxPerRoute(myServiceConfig.getMaxConnectionsPerRoute());
-        connectionManager.setValidateAfterInactivity(Duration.ofSeconds(10));
-        return connectionManager;
-    }
-
-    @Bean
-    public RequestConfig requestConfig() {
-        return RequestConfig.custom()
-            .setSocketTimeout(myServiceConfig.getReadTimeout())
-            .setConnectTimeout(myServiceConfig.getConnectTimeout())
-            .setConnectionRequestTimeout(myServiceConfig.getConnectionRequestTimeout())
-            .build();
-    }
-
-    @Bean
-    public ConnectionKeepAliveStrategy connectionKeepAliveStrategy() {
-        return (response, context) -> {
-            HeaderElementIterator it = new BasicHeaderElementIterator(
-                response.headerIterator(HTTP.CONN_KEEP_ALIVE));
-            while (it.hasNext()) {
-                HeaderElement he = it.nextElement();
-                String param = he.getName();
-                String value = he.getValue();
-                if (value != null && param.equalsIgnoreCase("timeout")) {
-                    return Long.parseLong(value) * 1000;
-                }
-            }
-            // Default keep-alive time of 30 seconds
-            return 30 * 1000;
-        };
+    public RestClient restClient(RestClient.Builder builder) {
+        return builder
+                .baseUrl("https://external-service.com")
+                .requestFactory(HttpComponentsClientHttpRequestFactory::new)
+                .defaultHeader(HttpHeaders.CONNECTION, "keep-alive")
+                .defaultStatusHandler(HttpStatusCode::isError, 
+                    (request, response) -> { throw new ResponseStatusException(response.getStatusCode()); })
+                .build();
     }
     
-    // Assuming this method is defined elsewhere in your code
-    private RemoteException createRemoteException(HttpRequest request, ClientHttpResponse response) {
-        // Your existing implementation
-        return new RemoteException();
+    @Bean
+    public RestTemplate restTemplate() {
+        return new RestTemplateBuilder()
+                .setConnectTimeout(Duration.ofSeconds(5))
+                .setReadTimeout(Duration.ofSeconds(10))
+                .build();
+    }
+    
+    @Bean
+    public Executor taskExecutor() {
+        return Executors.newVirtualThreadPerTaskExecutor();
     }
 }
-```
 
-```properties
-# Connection timeouts
-spring.rest-client.connect-timeout=5s
-spring.rest-client.read-timeout=10s
+// Controller class
+@RestController
+@RequestMapping("/api")
+public class ServiceController {
 
-# Connection pool settings (these are non-standard, consider using a @ConfigurationProperties class)
-app.rest-client.max-connections=500
-app.rest-client.max-per-route=100
-```
+    private final ExternalServiceClient externalServiceClient;
+    private final ResponseMapper responseMapper;
+    
+    public ServiceController(ExternalServiceClient externalServiceClient, ResponseMapper responseMapper) {
+        this.externalServiceClient = externalServiceClient;
+        this.responseMapper = responseMapper;
+    }
+    
+    @GetMapping("/resource/{id}")
+    public CompletableFuture<ResponseDTO> getResource(@PathVariable String id) {
+        return CompletableFuture.supplyAsync(() -> {
+            ExternalServiceResponse response = externalServiceClient.fetchResource(id);
+            return responseMapper.toDTO(response);
+        });
+    }
+    
+    @ExceptionHandler(ResponseStatusException.class)
+    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+    public Map<String, String> handleExceptions(ResponseStatusException e) {
+        return Map.of("error", e.getReason() != null ? e.getReason() : "An error occurred",
+                      "status", e.getStatusCode().toString());
+    }
+}
+
+// External Service Client with caching and circuit breaker
+@Service
+public class ExternalServiceClient {
+
+    private final RestClient restClient;
+    private final Cache<String, ExternalServiceResponse> responseCache;
+    private final CircuitBreaker circuitBreaker;
+    
+    public ExternalServiceClient(RestClient restClient) {
+        this.restClient = restClient;
+        this.responseCache = Caffeine.newBuilder()
+                .expireAfterWrite(5, TimeUnit.MINUTES)
+                .maximumSize(1000)
+                .build();
+        this.circuitBreaker = CircuitBreaker.ofDefaults("externalServiceClient");
+    }
+    
+    public ExternalServiceResponse fetchResource(String id) {
+        return responseCache.get(id, key -> circuitBreaker.executeSupplier(() -> {
+            try {
+                return restClient.get()
+                    .uri("/resources/{id}", key)
+                    .retrieve()
+                    .body(ExternalServiceResponse.class);
+            } catch (Exception e) {
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, 
+                    "External service unavailable");
+            }
+        }));
+    }
+}
+
+// Response Mapper
+@Component
+public class ResponseMapper {
+
+    public ResponseDTO toDTO(ExternalServiceResponse response) {
+        return new ResponseDTO(
+                response.id(),
+                response.name(),
+                response.description(),
+                LocalDateTime.now()
+        );
+    }
+}
+
+// DTO classes
+public record ResponseDTO(
+String id,
+String name,
+String description,
+LocalDateTime timestamp
+) {}
+
+public record ExternalServiceResponse(
+String id,
+String name,
+String description,
+Map<String, Object> additionalProperties
+) {}
