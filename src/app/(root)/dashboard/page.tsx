@@ -10,6 +10,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip";
+import { useSession } from "next-auth/react";
 
 enum Gender {
   Male = "male",
@@ -25,13 +26,16 @@ interface DashboardFormData {
 }
 
 export default function DashboardPage() {
+  const { data: session, status } = useSession();
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState("");
+  const [fieldOneLength, setFieldOneLength] = useState(0);
 
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors },
   } = useForm<DashboardFormData>({
     defaultValues: {
@@ -43,15 +47,33 @@ export default function DashboardPage() {
     },
   });
 
+  // Watch the fieldOne value to update the character count
+  const fieldOneValue = watch("fieldOne");
+
+  // Update the character count whenever fieldOne changes
+  useState(() => {
+    setFieldOneLength(fieldOneValue?.length || 0);
+  }, [fieldOneValue]);
+
   const onSubmit = async (data: DashboardFormData) => {
     setLoading(true);
     setSubmitError("");
+
+    if (status !== "authenticated") {
+      setSubmitError("You must be logged in to submit data");
+      setLoading(false);
+      return;
+    }
+
     try {
       const response = await fetch("/api/submit", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify(data),
       });
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || "Failed to submit form");
@@ -65,6 +87,41 @@ export default function DashboardPage() {
     }
   };
 
+  // Handle input changes for fieldOne to enforce exactly 11 characters
+  const handleFieldOneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    // Limit input to a maximum of 11 characters
+    if (value.length <= 11) {
+      setFieldOneLength(value.length);
+    }
+  };
+
+  // Show loading or unauthenticated state
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex justify-center items-center">
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  if (status === "unauthenticated") {
+    return (
+      <div className="min-h-screen flex justify-center items-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold mb-4">Authentication Required</h1>
+          <p className="mb-4">You need to be logged in to access this page.</p>
+          <Button
+            onClick={() => window.location.href = "/api/auth/signin"}
+            className="bg-blue-600 hover:bg-blue-700"
+          >
+            Sign In
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen">
       <div className="flex justify-center items-center py-12">
@@ -73,7 +130,7 @@ export default function DashboardPage() {
             Submit Your Data
           </h1>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            {/* Field One */}
+            {/* Field One - with exactly 11 characters validation */}
             <div>
               <Tooltip>
                 <TooltipTrigger>
@@ -85,15 +142,29 @@ export default function DashboardPage() {
                   side="right"
                   className="bg-gray-800 text-white px-3 py-1 rounded shadow-lg text-xs"
                 >
-                  <p>Enter the first value here.</p>
+                  <p>Enter exactly 11 characters.</p>
                 </TooltipContent>
               </Tooltip>
-              <Input
-                id="fieldOne"
-                placeholder="Enter first value"
-                className="w-full"
-                {...register("fieldOne", { required: "Field One is required" })}
-              />
+              <div className="relative">
+                <Input
+                  id="fieldOne"
+                  placeholder="Enter exactly 11 characters"
+                  className="w-full"
+                  maxLength={11}
+                  onChange={handleFieldOneChange}
+                  {...register("fieldOne", {
+                    required: "Field One is required",
+                    validate: (value) =>
+                      value.length === 11 || "Field must be exactly 11 characters",
+                    onChange: handleFieldOneChange
+                  })}
+                />
+                <span className={`absolute right-2 top-1/2 -translate-y-1/2 text-xs ${
+                  fieldOneLength === 11 ? 'text-green-500' : 'text-gray-500'
+                }`}>
+                  {fieldOneLength}/11
+                </span>
+              </div>
               {errors.fieldOne && (
                 <p className="text-red-500 text-xs mt-1">
                   {errors.fieldOne.message}
@@ -215,7 +286,11 @@ export default function DashboardPage() {
                 </label>
               </div>
             </div>
-            <Button type="submit" disabled={loading} className="w-full">
+            <Button
+              type="submit"
+              disabled={loading || fieldOneLength !== 11}
+              className={`w-full ${fieldOneLength !== 11 ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
               {loading ? "Submitting..." : "Submit"}
             </Button>
             {submitError && (
