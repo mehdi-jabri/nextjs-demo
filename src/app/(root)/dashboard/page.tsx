@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,7 +51,7 @@ export default function DashboardPage() {
   const fieldOneValue = watch("fieldOne");
 
   // Update the character count whenever fieldOne changes
-  useState(() => {
+  useEffect(() => {
     setFieldOneLength(fieldOneValue?.length || 0);
   }, [fieldOneValue]);
 
