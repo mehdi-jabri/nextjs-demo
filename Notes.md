@@ -1,3 +1,540 @@
+// lib/api/axios-server.ts (New or modified file)
+import axios, { AxiosError, AxiosInstance, AxiosRequestConfig } from "axios";
+
+// Define API base URLs using server-only env vars
+export const API_URLS = {
+main: process.env.MAIN_API_URL || "https://api.example.com",
+analytics: process.env.ANALYTICS_API_URL || "https://analytics-api.example.com",
+users: process.env.USERS_API_URL || "https://users-api.example.com",
+};
+
+export type ApiKey = keyof typeof API_URLS;
+
+// Factory function to create instances (can now optionally accept headers per call)
+export const createServerAxiosInstance = (baseURL: string): AxiosInstance => {
+const instance = axios.create({
+baseURL,
+timeout: 15000, // Adjust as needed
+headers: {
+"Content-Type": "application/json",
+// Add other static headers if needed, e.g., a server-side API key
+// 'X-Server-API-Key': process.env.SOME_STATIC_SERVER_KEY
+},
+});
+
+// Optional: Simplified interceptor for server-side logging/error handling
+instance.interceptors.response.use(
+(response) => response,
+(error: AxiosError) => {
+console.error(
+`[SERVER AXIOS ERROR] Request to ${error.config?.baseURL}${error.config?.url} failed:`,
+error.response?.status,
+error.message
+);
+// Don't attempt client-side refresh logic here
+return Promise.reject(error);
+}
+);
+
+return instance;
+};
+
+// Create instances for each API
+// These instances are primarily for setting the baseURL. Auth is added per-request.
+export const serverApiInstances: Record<ApiKey, AxiosInstance> = {
+main: createServerAxiosInstance(API_URLS.main),
+analytics: createServerAxiosInstance(API_URLS.analytics),
+users: createServerAxiosInstance(API_URLS.users),
+};
+
+// Function to get a server API instance by key
+export const getServerApiInstance = (key: ApiKey = "main"): AxiosInstance => {
+return serverApiInstances[key];
+};
+
+// Helper function to make authenticated server requests
+// It gets the instance and injects the Authorization header if a token is provided
+export const makeServerApiRequest = async (
+apiKey: ApiKey,
+config: AxiosRequestConfig,
+accessToken?: string | null // Pass token explicitly
+): Promise<any> => { // Consider using a more specific return type if possible
+const instance = getServerApiInstance(apiKey);
+const headers = { ...config.headers };
+
+if (accessToken) {
+headers.Authorization = `Bearer ${accessToken}`;
+}
+
+try {
+const response = await instance({ ...config, headers });
+return response.data;
+} catch (error) {
+// Error is already logged by the interceptor
+// Re-throw or handle specificially if needed, maybe transform error structure
+throw error; // Let the Route Handler manage the final response
+}
+};
+
+// app/api/users/route.ts
+import { NextResponse, NextRequest } from 'next/server';
+import { auth } from '@/auth'; // Adjust path to your auth config
+import { makeServerApiRequest } from '@/lib/api/axios-server'; // Adjust path
+import { AxiosError } from 'axios';
+
+export async function GET(request: NextRequest) {
+const session = await auth(); // Get session server-side
+
+if (!session?.access_token) {
+return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+}
+
+try {
+// Forward the request to the actual Users API
+const usersData = await makeServerApiRequest(
+'users', // The key for the users API instance/URL
+{ method: 'GET', url: '/users' }, // The specific endpoint on the Users API
+session.access_token
+);
+return NextResponse.json(usersData);
+
+} catch (error) {
+const axiosError = error as AxiosError;
+const status = axiosError.response?.status || 500;
+const message = axiosError.response?.data || axiosError.message || 'Failed to fetch users';
+console.error("[API Route Error - GET /api/users]:", status, message);
+return NextResponse.json({ message }, { status });
+}
+}
+
+
+
+// app/api/posts/route.ts
+import { NextResponse, NextRequest } from 'next/server';
+import { auth } from '@/auth'; // Adjust path
+import { makeServerApiRequest } from '@/lib/api/axios-server'; // Adjust path
+import { AxiosError } from 'axios';
+
+export async function POST(request: NextRequest) {
+const session = await auth();
+
+if (!session?.access_token) {
+return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+}
+
+try {
+const body = await request.json(); // Get body from client request
+
+    // Make POST request to the actual Main API
+    const postResponse = await makeServerApiRequest(
+      'main', // The key for the main API instance/URL
+      { method: 'POST', url: '/posts', data: body }, // Endpoint and data
+      session.access_token
+    );
+    return NextResponse.json(postResponse);
+
+} catch (error) {
+const axiosError = error as AxiosError;
+const status = axiosError.response?.status || 500;
+const message = axiosError.response?.data || axiosError.message || 'Failed to create post';
+console.error("[API Route Error - POST /api/posts]:", status, message);
+return NextResponse.json({ message }, { status });
+}
+}
+
+// app/api/analytics/route.ts
+import { NextResponse, NextRequest } from 'next/server';
+import { auth } from '@/auth'; // Adjust path
+import { makeServerApiRequest } from '@/lib/api/axios-server'; // Adjust path
+import { AxiosError } from 'axios';
+
+export async function GET(request: NextRequest) {
+const session = await auth();
+
+if (!session?.access_token) {
+return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+}
+
+try {
+// Make GET request to the actual Analytics API
+const analyticsData = await makeServerApiRequest(
+'analytics', // The key for the analytics API instance/URL
+{ method: 'GET', url: '/dashboard' }, // The specific endpoint
+session.access_token
+);
+return NextResponse.json(analyticsData);
+
+} catch (error) {
+const axiosError = error as AxiosError;
+const status = axiosError.response?.status || 500;
+const message = axiosError.response?.data || axiosError.message || 'Failed to fetch analytics';
+console.error("[API Route Error - GET /api/analytics]:", status, message);
+return NextResponse.json({ message }, { status });
+}
+}
+
+// File: lib/api/hooks/useInternalApi.ts (New or renamed/refactored file)
+import { useState, useCallback } from "react";
+import { AxiosRequestConfig } from "axios"; // Keep for config familiarity if desired
+
+// Note: We removed ApiKey and direct Axios instance usage from the hook options
+
+export interface ApiError {
+message: string;
+status?: number;
+data?: any; // Data from the error response body
+}
+
+export interface ApiState<T> {
+data: T | null;
+isLoading: boolean;
+error: ApiError | null;
+}
+
+// Generic fetch wrapper function (could be moved to a utils file)
+async function internalFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
+const response = await fetch(url, {
+headers: {
+'Content-Type': 'application/json',
+...options.headers,
+},
+...options,
+});
+
+    const responseData = await response.json().catch(() => ({})); // Attempt to parse JSON, default to empty obj if fails
+
+    if (!response.ok) {
+        const error: ApiError = {
+            message: responseData?.message || response.statusText || "An error occurred",
+            status: response.status,
+            data: responseData,
+        };
+        throw error;
+    }
+
+    return responseData as T;
+}
+
+
+// Hook for GET requests to internal API routes
+export function useInternalApiGet<T = any>(internalUrl: string, options?: { initialData?: T, onSuccess?: (data: T) => void; onError?: (error: ApiError) => void; onFinally?: () => void; }) {
+const [state, setState] = useState<ApiState<T>>({
+data: options?.initialData || null,
+isLoading: false,
+error: null,
+});
+
+// Note: config is now RequestInit (fetch options) not AxiosRequestConfig
+const fetchData = useCallback(
+async (config?: RequestInit) => {
+setState((prev) => ({ ...prev, isLoading: true, error: null }));
+try {
+// Call the internal Next.js route handler
+const result = await internalFetch<T>(internalUrl, { method: 'GET', ...config });
+setState((prev) => ({ ...prev, data: result, isLoading: false }));
+options?.onSuccess?.(result);
+return result;
+} catch (err) {
+const apiError = err as ApiError;
+setState((prev) => ({ ...prev, error: apiError, isLoading: false }));
+options?.onError?.(apiError);
+throw apiError; // Re-throw if needed for component logic
+} finally {
+options?.onFinally?.();
+}
+},
+[internalUrl, options] // Dependencies
+);
+
+return {
+...state,
+fetch: fetchData,
+reset: () => setState({ data: null, isLoading: false, error: null }),
+};
+}
+
+// Hook for POST requests to internal API routes
+export function useInternalApiPost<T = any, D = any>(internalUrl: string, options?: { onSuccess?: (data: T) => void; onError?: (error: ApiError) => void; onFinally?: () => void; }) {
+const [state, setState] = useState<ApiState<T>>({
+data: null,
+isLoading: false,
+error: null,
+});
+
+// Note: config is now RequestInit (fetch options) not AxiosRequestConfig
+const postData = useCallback(
+async (data: D, config?: Omit<RequestInit, 'body' | 'method'>) => { // Exclude body/method from config
+setState((prev) => ({ ...prev, isLoading: true, error: null }));
+try {
+const result = await internalFetch<T>(internalUrl, {
+method: 'POST',
+body: JSON.stringify(data),
+...config,
+});
+setState((prev) => ({ ...prev, data: result, isLoading: false }));
+options?.onSuccess?.(result);
+return result;
+} catch (err) {
+const apiError = err as ApiError;
+setState((prev) => ({ ...prev, error: apiError, isLoading: false }));
+options?.onError?.(apiError);
+throw apiError;
+} finally {
+options?.onFinally?.();
+}
+},
+[internalUrl, options]
+);
+
+return {
+...state,
+submit: postData,
+reset: () => setState({ data: null, isLoading: false, error: null }),
+};
+}
+
+// Implement useInternalApiPut, useInternalApiDelete similarly if needed, using fetch with PUT/DELETE methods
+
+// File: app/users/page.tsx
+"use client";
+
+import { useEffect } from "react";
+// Import the new hook
+import { useInternalApiGet } from "@/lib/api/hooks/useInternalApi"; // Adjust path
+
+// User type definition
+interface User {
+id: string;
+name: string;
+email: string;
+}
+
+export default function UsersPage() {
+// Call the internal /api/users route
+const {
+data: users,
+isLoading,
+error,
+fetch: fetchUsers
+} = useInternalApiGet<User[]>("/api/users", { // <-- Use internal route
+// No apiKey needed here
+onError: (err) => {
+console.error("Failed to fetch users:", err);
+}
+});
+
+useEffect(() => {
+fetchUsers();
+}, [fetchUsers]);
+
+// ... rest of the component remains the same (JSX for loading, error, data)
+// ... (render logic as before)
+
+if (isLoading) {
+return <div className="p-4">Loading users...</div>;
+}
+
+if (error) {
+return (
+<div className="p-4 bg-red-50 text-red-700 rounded">
+<h2 className="font-bold">Error loading users</h2>
+{/* Display error message from the API route response */}
+<p>{error.data?.message || error.message}</p>
+<button
+className="mt-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+onClick={() => fetchUsers()}
+>
+Try Again
+</button>
+</div>
+);
+}
+
+return (
+<div className="p-4">
+<h1 className="text-2xl font-bold mb-4">Users</h1>
+
+      {users && users.length > 0 ? (
+        <ul className="space-y-2">
+          {users.map((user) => (
+            <li key={user.id} className="p-3 border rounded shadow-sm">
+              <h2 className="font-semibold">{user.name}</h2>
+              <p className="text-gray-600">{user.email}</p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>No users found.</p>
+      )}
+    </div>
+);
+}
+
+// File: app/posts/create/page.tsx
+"use client";
+
+import { useState } from "react";
+// Import the new hook
+import { useInternalApiPost } from "@/lib/api/hooks/useInternalApi"; // Adjust path
+import { useRouter } from "next/navigation";
+
+interface PostData {
+title: string;
+content: string;
+}
+
+// Expected response structure from POST /api/posts
+interface PostResponse {
+id: string;
+// ... other fields returned by your API
+}
+
+
+export default function CreatePostPage() {
+const router = useRouter();
+const [form, setForm] = useState<PostData>({
+title: "",
+content: "",
+});
+
+// Call the internal /api/posts route
+const {
+submit: createPost,
+isLoading,
+error
+} = useInternalApiPost<PostResponse, PostData>("/api/posts", { // <-- Use internal route
+// No apiKey needed here
+onSuccess: (data) => {
+console.log("Post created successfully:", data);
+if (data?.id) {
+router.push(`/posts/${data.id}`); // Navigate on success
+} else {
+console.warn("Create post response did not contain an ID. Staying on page.");
+// Optionally show a success message without redirecting
+}
+},
+onError: (err) => {
+console.error("Error creating post:", err)
+// Error message is displayed below
+}
+});
+
+const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+const { name, value } = e.target;
+setForm((prev) => ({ ...prev, [name]: value }));
+};
+
+const handleSubmit = async (e: React.FormEvent) => {
+e.preventDefault();
+try {
+await createPost(form);
+// Success handling (redirect) is now in the onSuccess callback
+} catch (submissionError) {
+// Error is already handled by the hook's onError and state update
+// No need to do much here unless you want specific submit-failure logic
+console.log("Submission failed (error handled by hook).")
+}
+};
+
+// ... rest of the component remains the same (JSX for form, error display)
+// ... (render logic as before)
+
+return (
+<div className="p-4 max-w-2xl mx-auto">
+<h1 className="text-2xl font-bold mb-4">Create New Post</h1>
+
+      {error && (
+        <div className="p-4 mb-4 bg-red-50 text-red-700 rounded">
+          <p className="font-bold">Error creating post</p>
+           {/* Display error message from the API route response */}
+          <p>{error.data?.message || error.message}</p>
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label htmlFor="title" className="block mb-1 font-medium">
+            Title
+          </label>
+          <input
+            type="text"
+            id="title"
+            name="title"
+            value={form.title}
+            onChange={handleChange}
+            required
+            className="w-full p-2 border rounded"
+            disabled={isLoading}
+          />
+        </div>
+
+        <div>
+          <label htmlFor="content" className="block mb-1 font-medium">
+            Content
+          </label>
+          <textarea
+            id="content"
+            name="content"
+            value={form.content}
+            onChange={handleChange}
+            required
+            rows={6}
+            className="w-full p-2 border rounded"
+            disabled={isLoading}
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={isLoading}
+          className={`px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 ${
+            isLoading ? "opacity-50 cursor-not-allowed" : ""
+          }`}
+        >
+          {isLoading ? "Creating..." : "Create Post"}
+        </button>
+      </form>
+    </div>
+);
+}
+
+// File: app/analytics/page.tsx
+"use client";
+
+import { useEffect } from "react";
+// Import the new hook
+import { useInternalApiGet } from "@/lib/api/hooks/useInternalApi"; // Adjust path
+
+interface AnalyticsData {
+pageViews: number;
+uniqueVisitors: number;
+averageTimeOnSite: string;
+topReferrers: Array<{ source: string; count: number }>;
+}
+
+export default function AnalyticsPage() {
+// Call the internal /api/analytics route
+const {
+data,
+isLoading,
+error,
+fetch: fetchAnalytics
+} = useInternalApiGet<AnalyticsData>("/api/analytics", { // <-- Use internal route
+// No apiKey needed here
+onError: (err) => {
+console.error("Failed to fetch analytics:", err);
+}
+});
+
+useEffect(() => {
+fetchAnalytics();
+}, [fetchAnalytics]);
+
+// ... rest of the component remains the same (JSX for loading, error, data)
+// ... (render logic as before)
+// ...
+}
+
 // File: lib/api/axios-instance.ts
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
 import { getSession } from "next-auth/react";
