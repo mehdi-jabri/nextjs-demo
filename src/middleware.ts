@@ -8,9 +8,9 @@ export default auth((req) => {
   const isAuthPage = nextUrl.pathname.startsWith('/auth');
 
   // Redirect to sign-in if accessing protected page without login
-  if (!isLoggedIn && !isAuthPage && nextUrl.pathname !== '/') {
-    return NextResponse.redirect(new URL('/auth/signin', nextUrl));
-  }
+  // if (!isLoggedIn && !isAuthPage && nextUrl.pathname !== '/') {
+  //   return NextResponse.redirect(new URL('/auth/signin', nextUrl));
+  // }
 
   // Redirect to homepage if user is already logged in and trying to access auth pages
   if (isLoggedIn && isAuthPage) {

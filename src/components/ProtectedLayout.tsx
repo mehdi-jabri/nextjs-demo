@@ -8,16 +8,16 @@ export function ProtectedLayout({ children }: { children: React.ReactNode }) {
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  useEffect(() => {
-    if (status === "loading") return;
-    if (!session) {
-      router.push("/auth/signin");
-    }
-  }, [session, status, router]);
+  // useEffect(() => {
+  //   if (status === "loading") return;
+  //   if (!session) {
+  //     router.push("/auth/signin");
+  //   }
+  // }, [session, status, router]);
 
-  if (status === "loading" || !session) {
-    return <div className="p-4">Loading...</div>;
-  }
+  // if (status === "loading" || !session) {
+  //   return <div className="p-4">Loading...</div>;
+  // }
 
   return <>{children}</>;
 }
