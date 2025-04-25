@@ -1,233 +1,303 @@
-// lib/api/server-fetch.ts (Create this new file)
-import { auth } from '@/auth'; // Adjust path to your NextAuth/Auth.js config
-import { NextResponse } from 'next/server';
+// lib/api/client-fetch.ts
 
-// Define a standard error response structure for your internal API routes
-interface ErrorResponse {
+// Define the expected structure for errors coming from our Route Handlers
+// (Matching the ErrorResponse defined in server-fetch.ts)
+export interface ApiError {
 message: string;
-status: number; // HTTP status code
-details?: any;  // Optional field for more specific error info from external API
+status: number;
+details?: any;
 }
 
 /**
-* Creates a standardized JSON error response.
+* Fetches the list of users from the internal API route.
   */
-  function createErrorResponse(message: string, status: number, details?: any): NextResponse<ErrorResponse> {
-  console.error(`[API Error Response] Status: ${status}, Message: ${message}`, details ? `Details: ${JSON.stringify(details)}` : '');
-  return NextResponse.json({ message, status, details }, { status });
+  export async function fetchUserList<T = any>(): Promise<T> { // Generic type T
+  const response = await fetch('/api/users'); // Call internal GET /api/users
+
+  if (!response.ok) {
+  const errorData = await response.json().catch(() => ({}));
+  throw {
+  message: errorData.message || `HTTP error! status: ${response.status}`,
+  status: errorData.status || response.status,
+  details: errorData.details
+  } as ApiError; // Type assertion
+  }
+  if (response.status === 204) return [] as T; // Handle no content, return empty array
+  return await response.json();
   }
 
 /**
-* Options for the server fetch helper. Extends standard RequestInit.
+* Creates a new post by calling the internal API route.
+* @param postData The data for the new post.
   */
-  interface ServerFetchOptions extends RequestInit {
-  // You can add custom options here if needed later
+  export async function createPost<T = any, D = any>(postData: D): Promise<T> { // Generic types T (response), D (data)
+  const response = await fetch('/api/posts', { // Call internal POST /api/posts
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(postData)
+  });
+
+  if (!response.ok) {
+  const errorData = await response.json().catch(() => ({}));
+  throw {
+  message: errorData.message || `HTTP error! status: ${response.status}`,
+  status: errorData.status || response.status,
+  details: errorData.details
+  } as ApiError;
+  }
+  if (response.status === 204) return {} as T; // Handle no content if applicable
+  return await response.json(); // Expecting JSON response (e.g., { id: string })
   }
 
-/**
-* Reusable helper to perform authenticated fetch calls from Next.js server environments (Route Handlers, Server Actions).
-* Handles authentication, executes fetch, parses response, and returns standardized NextResponse objects.
-* Leverages Next.js extended fetch for caching/deduplication (unless overridden in options).
-*
-* @param externalUrl The full URL to the external API endpoint.
-* @param options Standard fetch options (method, headers, body, cache, next options etc.).
-* @param requiresAuth If true (default), fetches server session and adds Authorization header.
-* @returns A NextResponse promise containing either the successful data or a standardized error object.
-  */
-  export async function makeServerFetch(
-  externalUrl: string,
-  options: ServerFetchOptions = {},
-  requiresAuth: boolean = true
-  ): Promise<NextResponse> {
+// You could add fetchSingleUser here too for consistency
+export async function fetchSingleUser<T = any>(userId: string): Promise<T | null> { // Return null if 204?
+if (!userId) throw new Error("User ID is required."); // Basic validation
 
-  let accessToken: string | undefined;
+    const internalApiUrl = `/api/users/${encodeURIComponent(userId)}`;
+    const response = await fetch(internalApiUrl);
 
-  // 1. Authentication
-  if (requiresAuth) {
-  try {
-  const session = await auth(); // Get session on the server
-  if (!session?.access_token) {
-  return createErrorResponse('Unauthorized: No valid session found.', 401);
-  }
-  accessToken = session.access_token;
-  } catch (authError) {
-  console.error("[Server Fetch] Authentication error:", authError);
-  return createErrorResponse('Authentication failed.', 500);
-  }
-  }
-
-  // 2. Prepare Fetch Request
-  const fetchOptions: RequestInit = {
-  ...options, // Spread user options first
-  headers: {
-  'Content-Type': 'application/json', // Default, can be overridden below
-  ...options.headers, // Spread user headers, potentially overriding Content-Type
-  ...(accessToken && { Authorization: `Bearer ${accessToken}` }), // Add Auth token if available/required
-  },
-  };
-
-  // Ensure body is stringified if it's an object and content type is JSON
-  if (fetchOptions.body && typeof fetchOptions.body === 'object' && (fetchOptions.headers as Record<string, string>)['Content-Type'] === 'application/json') {
-  try {
-  fetchOptions.body = JSON.stringify(fetchOptions.body);
-  } catch (stringifyError) {
-  console.error("[Server Fetch] Error stringifying request body:", stringifyError);
-  return createErrorResponse('Internal Server Error: Could not process request body.', 500);
-  }
-  }
-
-  // 3. Execute Fetch and Handle Response
-  try {
-  console.log(`[Server Fetch] Requesting: ${fetchOptions.method || 'GET'} ${externalUrl}`);
-  const response = await fetch(externalUrl, fetchOptions);
-
-       // Attempt to parse response body for both success and error cases
-       let responseData: any = null;
-       const contentType = response.headers.get("content-type");
-       if (contentType && contentType.includes("application/json")) {
-            try {
-                responseData = await response.json();
-            } catch (parseError) {
-                console.warn(`[Server Fetch] Failed to parse JSON response from ${externalUrl} (Status: ${response.status}):`, parseError);
-                // If it was supposed to be JSON but failed, treat it as an error condition unless status is 2xx
-                if (!response.ok) {
-                    return createErrorResponse(`External API Error: Invalid JSON response received. Status: ${response.status}`, response.status);
-                }
-                // If it was 2xx but not parsable JSON, maybe return empty or handle differently?
-                // For now, we proceed but responseData will be null.
-            }
-       } else if (response.status === 204) {
-           // Handle No Content response
-           return new NextResponse(null, { status: 204 });
-       }
-       // else: Non-JSON response, responseData remains null.
-
-       // 4. Handle HTTP Errors (response not ok)
-       if (!response.ok) {
-           // Use details from parsed error response if available, otherwise use status text
-           const message = responseData?.message || responseData?.error || `External API Error: ${response.statusText}`;
-           const details = responseData ? (responseData.details || responseData) : undefined; // Pass along any other data
-           return createErrorResponse(message, response.status, details);
-       }
-
-       // 5. Handle Success
-       console.log(`[Server Fetch] Success: ${response.status} from ${externalUrl}`);
-       // Return parsed data (which might be null for non-JSON or failed parse on 2xx)
-       // Status code from the original response is preserved
-       return NextResponse.json(responseData, { status: response.status });
-
-  } catch (networkError: any) {
-  // Handle network errors (DNS, connection refused, etc.)
-  console.error(`[Server Fetch] Network or fetch execution error for ${externalUrl}:`, networkError);
-  return createErrorResponse('Internal Server Error: Failed to connect to external service.', 500, networkError.message);
-  }
-  }
-
-// app/api/users/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { makeServerFetch } from '@/lib/api/server-fetch'; // Adjust path
-
-const USERS_API_URL = process.env.USERS_API_URL;
-
-export async function GET(request: NextRequest) {
-if (!USERS_API_URL) {
-// Use NextResponse directly for config errors
-return NextResponse.json({ message: 'Configuration error: Users API URL not set.' }, { status: 500 });
-}
-
-    const endpoint = `${USERS_API_URL}/users`;
-
-    // Example: Default Next.js fetch caching will apply.
-    // To force no cache: const options = { cache: 'no-store' as RequestCache };
-    // To revalidate: const options = { next: { revalidate: 60 } }; // Revalidate every 60 seconds
-    return makeServerFetch(endpoint, { method: 'GET' });
-}
-
-// app/api/posts/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { makeServerFetch } from '@/lib/api/server-fetch'; // Adjust path
-
-const MAIN_API_URL = process.env.MAIN_API_URL;
-
-export async function POST(request: NextRequest) {
-if (!MAIN_API_URL) {
-return NextResponse.json({ message: 'Configuration error: Main API URL not set.' }, { status: 500 });
-}
-
-    let requestBody: any;
-    try {
-        requestBody = await request.json(); // Parse body sent from client
-    } catch (e) {
-        return NextResponse.json({ message: 'Invalid request body: Must be valid JSON.' }, { status: 400 });
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+         throw {
+            message: errorData.message || `HTTP error! status: ${response.status}`,
+            status: errorData.status || response.status,
+            details: errorData.details
+        } as ApiError;
     }
 
-    const endpoint = `${MAIN_API_URL}/posts`;
+    if (response.status === 204) {
+        return null; // Explicitly return null for No Content / Not Found
+    }
+    return await response.json();
+}
 
-    // The helper function handles stringifying the body object
-    const response = await makeServerFetch(endpoint, {
-        method: 'POST',
-        body: requestBody, // Pass the parsed JS object
-    });
+// File: app/users/page.tsx
+"use client";
 
-    // Optional: Adjust status code if needed (e.g., return 201 Created)
-    // The helper returns the status from the external API. If it's 200, but you want 201:
-    if (response.ok && response.status === 200) {
+import { useState, useEffect, useCallback } from "react";
+// Import the specific fetch function and error type
+import { fetchUserList, ApiError } from "@/lib/api/client-fetch"; // Adjust path
+
+// User type definition
+interface User {
+id: string;
+name: string;
+email: string;
+}
+
+export default function UsersPage() {
+// State management using useState
+const [users, setUsers] = useState<User[] | null>(null);
+const [isLoading, setIsLoading] = useState<boolean>(true); // Start loading initially
+const [error, setError] = useState<ApiError | null>(null);
+
+    // Define the function to fetch data using useCallback for stability
+    const loadUsers = useCallback(async () => {
+        setIsLoading(true);
+        setError(null); // Clear previous error
+        // setUsers(null); // Optionally clear previous data immediately
         try {
-            const data = await response.json(); // Re-parse (or ideally adjust helper to return parsed data)
-            return NextResponse.json(data, { status: 201 });
-        } catch {
-             // Handle potential re-parsing error, though unlikely if response.ok
-            return response; // return original 200 response
+            const data = await fetchUserList<User[]>(); // Call the helper function
+            setUsers(data);
+        } catch (err: any) {
+            console.error("Failed to fetch users:", err);
+            setError(err as ApiError); // Set the structured error
+            setUsers(null); // Ensure data is cleared on error
+        } finally {
+            setIsLoading(false);
         }
+    }, []); // Empty dependency array means this function doesn't change
+
+    // Fetch users when component mounts
+    useEffect(() => {
+        loadUsers();
+    }, [loadUsers]); // Depend on the memoized loadUsers function
+
+    // Render loading state
+    if (isLoading && users === null) { // Show initial loading indicator
+        return <div className="p-4">Loading users...</div>;
     }
 
-    return response; // Return the response from the helper (could be success or error)
+    // Render error state
+    if (error) {
+        return (
+            <div className="p-4 bg-red-50 text-red-700 rounded">
+                <h2 className="font-bold">Error loading users</h2>
+                {/* Display message from the structured error */}
+                <p>{error.message || "An unknown error occurred."}</p>
+                {/* Optionally display details if available */}
+                {error.details && (
+                     <pre className="mt-2 text-sm bg-red-100 p-2 rounded overflow-x-auto">
+                        <code>{JSON.stringify(error.details, null, 2)}</code>
+                     </pre>
+                )}
+                <button
+                    className="mt-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                    onClick={loadUsers} // Call loadUsers directly to retry
+                    disabled={isLoading} // Disable button while loading
+                >
+                    {isLoading ? "Loading..." : "Try Again"}
+                </button>
+            </div>
+        );
+    }
+
+    // Render data or no data found state
+    return (
+        <div className="p-4">
+            <h1 className="text-2xl font-bold mb-4">Users</h1>
+            {/* Optional: Button to refresh */}
+            <button
+                 className="mb-4 px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                 onClick={loadUsers}
+                 disabled={isLoading}
+            >
+                {isLoading ? "Refreshing..." : "Refresh List"}
+            </button>
+
+            {/* Display user list or 'No users found' message */}
+            {users && users.length > 0 ? (
+                <ul className="space-y-2">
+                    {users.map((user) => (
+                        <li key={user.id} className="p-3 border rounded shadow-sm">
+                            <h2 className="font-semibold">{user.name}</h2>
+                            <p className="text-gray-600">{user.email}</p>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                // Check if not loading to differentiate between initial load and empty list
+                !isLoading && <p>No users found.</p>
+            )}
+        </div>
+    );
 }
 
-// app/api/analytics/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { makeServerFetch } from '@/lib/api/server-fetch'; // Adjust path
+// File: app/posts/create/page.tsx
+"use client";
 
-const ANALYTICS_API_URL = process.env.ANALYTICS_API_URL;
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+// Import the specific fetch function and error type
+import { createPost, ApiError } from "@/lib/api/client-fetch"; // Adjust path
 
-export async function GET(request: NextRequest) {
-if (!ANALYTICS_API_URL) {
-return NextResponse.json({ message: 'Configuration error: Analytics API URL not set.' }, { status: 500 });
+// Input data structure
+interface PostData {
+title: string;
+content: string;
 }
 
-    const endpoint = `${ANALYTICS_API_URL}/dashboard`;
-
-    // Example: Force fetch to bypass cache for this specific request
-    const options = { cache: 'no-store' as RequestCache };
-
-    return makeServerFetch(endpoint, { method: 'GET', ...options });
+// Expected response structure after successful post creation
+interface PostResponse {
+id: string;
+// Include other fields if your API returns them
 }
 
-// Example client-side fetch and error handling
-async function fetchUsersFromInternalApi() {
-try {
-const response = await fetch('/api/users'); // Call internal route handler
-if (!response.ok) {
-// Attempt to parse the standardized error from the route handler
-const errorData = await response.json();
-console.error('API Error:', errorData);
-// Throw an object matching the expected structure for UI handling
-throw {
-message: errorData.message || `HTTP error! status: ${response.status}`,
-status: errorData.status || response.status,
-details: errorData.details
-};
-}
-const users = await response.json();
-return users;
-} catch (error) {
-console.error('Failed to fetch users:', error);
-// Re-throw the structured error or handle it
-throw error;
-}
-}
+export default function CreatePostPage() {
+const router = useRouter();
+const [form, setForm] = useState<PostData>({
+title: "",
+content: "",
+});
+// State for loading and error feedback
+const [isLoading, setIsLoading] = useState<boolean>(false);
+const [error, setError] = useState<ApiError | null>(null);
 
-// In your component's error display:
-// if (error) {
-//   return <div>Error: {error.message} {error.details ? JSON.stringify(error.details) : ''}</div>
-// }
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        const { name, value } = e.target;
+        setForm((prev) => ({ ...prev, [name]: value }));
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setIsLoading(true);
+        setError(null); // Clear previous error
+
+        try {
+            // Call the helper function to POST data
+            const result = await createPost<PostResponse, PostData>(form);
+
+            console.log("Post created successfully:", result);
+            // Use optional chaining for safety
+            if (result?.id) {
+                router.push(`/posts/${result.id}`); // Navigate on success if ID exists
+            } else {
+                 // Handle cases where ID might not be returned or navigation isn't desired
+                 console.warn("Post created, but ID not found in response or navigation skipped.");
+                 // Maybe redirect to a list page or show a success message
+                 router.push('/posts'); // Example: redirect to posts list
+            }
+
+        } catch (err: any) {
+            console.error("Failed to create post:", err);
+            setError(err as ApiError); // Set the structured error object
+        } finally {
+            setIsLoading(false); // Ensure loading state is reset
+        }
+    };
+
+    return (
+        <div className="p-4 max-w-2xl mx-auto">
+            <h1 className="text-2xl font-bold mb-4">Create New Post</h1>
+
+            {/* Display error message if present */}
+            {error && (
+                <div className="p-4 mb-4 bg-red-50 text-red-700 rounded">
+                    <p className="font-bold">Error creating post</p>
+                    {/* Display message from the structured error */}
+                    <p>{error.message || "An unknown error occurred."}</p>
+                     {/* Optionally display details */}
+                     {error.details && (
+                        <pre className="mt-2 text-sm bg-red-100 p-2 rounded overflow-x-auto">
+                            <code>{JSON.stringify(error.details, null, 2)}</code>
+                        </pre>
+                     )}
+                </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                    <label htmlFor="title" className="block mb-1 font-medium">
+                        Title
+                    </label>
+                    <input
+                        type="text"
+                        id="title"
+                        name="title"
+                        value={form.title}
+                        onChange={handleChange}
+                        required
+                        className="w-full p-2 border rounded"
+                        disabled={isLoading} // Disable input while loading
+                    />
+                </div>
+
+                <div>
+                    <label htmlFor="content" className="block mb-1 font-medium">
+                        Content
+                    </label>
+                    <textarea
+                        id="content"
+                        name="content"
+                        value={form.content}
+                        onChange={handleChange}
+                        required
+                        rows={6}
+                        className="w-full p-2 border rounded"
+                        disabled={isLoading} // Disable input while loading
+                    />
+                </div>
+
+                <button
+                    type="submit"
+                    disabled={isLoading} // Disable button while loading
+                    className={`px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 ${
+                        isLoading ? "opacity-50 cursor-not-allowed" : ""
+                    }`}
+                >
+                    {isLoading ? "Creating..." : "Create Post"}
+                </button>
+            </form>
+        </div>
+    );
+}
